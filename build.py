@@ -1,5 +1,7 @@
 from sys import argv, exit
 from osgeo import ogr
+from shapely.geos import lgeos
+from shapely.geometry.base import geom_factory
 from shapely.wkb import loads, dumps
 from shapely.geometry import LineString, MultiLineString
 from itertools import combinations
@@ -47,22 +49,12 @@ def load_datasource(filename):
 def join_multiline_parts(shape):
     """
     """
-    if shape.geom_type != 'MultiLineString':
+    if shape.type != 'MultiLineString':
         return shape
     
-    lines = [LineString(list(geom.coords)) for geom in shape.geoms]
-    
-    i = 0
-    
-    while i < len(lines) - 1:
-        if lines[i].touches(lines[i + 1]):
-            c1, c2 = list(lines[i].coords), list(lines.pop(i + 1).coords)
-            lines[i] = LineString(c1 + c2[1:])
-
-        else:
-            i += 1
-
-    return MultiLineString([list(line.coords) for line in lines])
+    # copied from shapely.ops.linemerge at http://github.com/sgillies/shapely
+    result = lgeos.GEOSLineMerge(shape._geom)
+    return geom_factory(result)
 
 datasource = load_datasource(argv[1])
 indexes = range(len(datasource.values))
@@ -83,7 +75,7 @@ for (i, j) in combinations(indexes, 2):
         border = join_multiline_parts(shape1.intersection(shape2))
         shared[(i, j)] = border
         
-        print '-', border.geom_type, int(border.length)
+        print '-', border.type, int(border.length), len(getattr(border, 'geoms', [None]))
 
 unshared = []
 
@@ -102,8 +94,8 @@ for i in indexes:
     shared_lengths = [border.length for (key, border) in shared.items() if i in key]
     
     print datasource.values[i][4],
-    print datasource.shapes[i].geom_type, int(datasource.shapes[i].length),
-    print '=', unshared[i].geom_type, int(unshared[i].length),
+    print datasource.shapes[i].type, int(datasource.shapes[i].length),
+    print '=', unshared[i].type, int(unshared[i].length),
     print '+', map(int, shared_lengths),
     print '=', int(unshared[i].length + sum(shared_lengths))
     
@@ -120,7 +112,7 @@ for field in datasource.fields:
     newlayer.CreateField(field_defn)
 
 for (i, shape) in enumerate(unshared):
-    if shape.geom_type not in ('LineString', 'MultiLineString'):
+    if shape.type not in ('LineString', 'MultiLineString'):
         continue
 
     feat = ogr.Feature(newlayer.GetLayerDefn())
@@ -134,5 +126,5 @@ for (i, shape) in enumerate(unshared):
 
     newlayer.CreateFeature(feat)
 
-    if shape.geom_type == 'MultiLineString':
+    if shape.type == 'MultiLineString':
         print len(shape.geoms), datasource.values[i][4]
