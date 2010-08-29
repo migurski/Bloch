@@ -38,7 +38,8 @@ def load_datasource(filename):
     features, shapes = [], []
     
     for feature in layer:
-        features.append(feature)
+        values = [feature.GetField(field.name) for field in fields]
+        features.append(values)
     
         shape = loads(feature.geometry().ExportToWkb())
         shapes.append(shape)
@@ -59,7 +60,7 @@ for (i, j) in combinations(indexes, 2):
     shape2 = datasource.shapes[j]
     
     if shape1.intersects(shape2):
-        print feature1.GetField(4), 'and', feature2.GetField(4),
+        print feature1[4], 'and', feature2[4],
         
         border = shape1.intersection(shape2)
         shared[(i, j)] = border
@@ -82,7 +83,7 @@ for i in indexes:
 
     shared_lengths = [border.length for (key, border) in shared.items() if i in key]
     
-    print datasource.features[i].GetField(4),
+    print datasource.features[i][4],
     print datasource.shapes[i].geom_type, int(datasource.shapes[i].length),
     print '=', unshared[i].geom_type, int(unshared[i].length),
     print '+', map(int, shared_lengths),
@@ -90,10 +91,6 @@ for i in indexes:
     
     tolerance, error = 0.000001, abs(datasource.shapes[i].length - unshared[i].length - sum(shared_lengths))
     assert error < tolerance, 'Error too large: %(error).8f > %(tolerance).8f' % locals()
-
-print '\n'.join(dir(ogr))
-print '-' * 80
-print '-' * 40
 
 driver = ogr.GetDriverByName('ESRI Shapefile')
 source = driver.CreateDataSource('out.shp')
@@ -105,7 +102,9 @@ for field in datasource.fields:
     newlayer.CreateField(field_defn)
 
 feat = ogr.Feature(newlayer.GetLayerDefn())
-feat.SetField('County', 'Hello World')
+
+for (i, field) in enumerate(datasource.fields):
+    feat.SetField(field.name, datasource.features[0][i])
 
 geom = ogr.CreateGeometryFromWkb(dumps(datasource.shapes[0]))
 
