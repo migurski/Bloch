@@ -1,7 +1,7 @@
 from sys import argv, stderr
 from osgeo import ogr
 from shapely.geos import lgeos
-from shapely.geometry import LineString, Polygon
+from shapely.geometry import MultiLineString, LineString, Polygon
 from shapely.geometry.base import geom_factory
 from shapely.wkb import loads, dumps
 from shapely.ops import polygonize
@@ -151,14 +151,19 @@ for i in indexes:
 
 print >> stderr, 'Building output...'
 
-driver = ogr.GetDriverByName('ESRI Shapefile')
-source = driver.CreateDataSource('out.shp')
-newlayer = source.CreateLayer('default', datasource.srs, ogr.wkbPolygon)
+err_driver = ogr.GetDriverByName('ESRI Shapefile')
+err_source = err_driver.CreateDataSource('err.shp')
+err_layer = err_source.CreateLayer('default', datasource.srs, ogr.wkbMultiLineString)
+
+out_driver = ogr.GetDriverByName('ESRI Shapefile')
+out_source = out_driver.CreateDataSource('out.shp')
+out_layer = out_source.CreateLayer('default', datasource.srs, ogr.wkbPolygon)
 
 for field in datasource.fields:
-    field_defn = ogr.FieldDefn(field.name, field.type)
-    field_defn.SetWidth(field.width)
-    newlayer.CreateField(field_defn)
+    for a_layer in (out_layer, err_layer):
+        field_defn = ogr.FieldDefn(field.name, field.type)
+        field_defn.SetWidth(field.width)
+        a_layer.CreateField(field_defn)
 
 tolerance = 650 # 650 is a problem for co2000p020-CA-merc.shp
 
@@ -176,6 +181,7 @@ for i in indexes:
 
     try:
         poly = polygonize(lines).next()
+
     except StopIteration:
         # I guess this one doesn't get included
         
@@ -185,14 +191,29 @@ for i in indexes:
         if lost_portion > 5:
             #raise Warning('Lost feature #%(i)d, %(lost_portion)d times larger than maximum tolerance' % locals())
             print >> stderr, 'Lost feature #%(i)d, %(lost_portion)d times larger than maximum tolerance' % locals()
+    
+            feat = ogr.Feature(err_layer.GetLayerDefn())
+            
+            for (j, field) in enumerate(datasource.fields):
+                feat.SetField(field.name, datasource.values[i][j])
+            
+            multiline = MultiLineString([list(line.coords) for line in lines])
+            
+            geom = ogr.CreateGeometryFromWkb(dumps(multiline))
+            
+            feat.SetGeometry(geom)
+        
+            err_layer.CreateFeature(feat)
+
             continue
         
         print >> stderr, 'Skipped feature #%(i)d' % locals()
+    
         continue
 
     #
     
-    feat = ogr.Feature(newlayer.GetLayerDefn())
+    feat = ogr.Feature(out_layer.GetLayerDefn())
     
     for (j, field) in enumerate(datasource.fields):
         feat.SetField(field.name, datasource.values[i][j])
@@ -201,4 +222,4 @@ for i in indexes:
     
     feat.SetGeometry(geom)
 
-    newlayer.CreateFeature(feat)
+    out_layer.CreateFeature(feat)
