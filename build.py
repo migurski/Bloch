@@ -1,6 +1,6 @@
 from sys import argv, exit
 from osgeo import ogr
-from shapely.wkb import loads
+from shapely.wkb import loads, dumps
 from itertools import combinations
 
 source = ogr.Open(argv[1])
@@ -9,8 +9,7 @@ layer = source.GetLayer(0)
 indexes = range(layer.GetFeatureCount()) 
 features, shapes = [], []
 
-for i in indexes:
-    feature = layer.GetNextFeature()
+for feature in layer:
     features.append(feature)
 
     shape = loads(feature.geometry().ExportToWkb())
@@ -58,3 +57,34 @@ for i in indexes:
     
     tolerance, error = 0.000001, abs(shapes[i].length - unshared[i].length - sum(shared_lengths))
     assert error < tolerance, 'Error too large: %(error).8f > %(tolerance).8f' % locals()
+
+print '\n'.join(dir(ogr))
+print '-' * 80
+print source.GetDriver()
+print layer.GetSpatialRef()
+defn = layer.GetLayerDefn()
+
+fields = [(field_defn.GetNameRef(), field_defn.GetType(), field_defn.GetWidth())
+          for field_defn 
+          in [defn.GetFieldDefn(i) for i in range(defn.GetFieldCount())]]
+
+print defn.GetGeomType()
+print '-' * 40
+
+driver = ogr.GetDriverByName('ESRI Shapefile')
+source = driver.CreateDataSource('out.shp')
+newlayer = source.CreateLayer('default', None, defn.GetGeomType())
+
+for (n, t, w) in fields:
+    defn = ogr.FieldDefn(n, t)
+    defn.SetWidth(w)
+    newlayer.CreateField(defn)
+
+feat = ogr.Feature(newlayer.GetLayerDefn())
+feat.SetField('County', 'Hello World')
+
+geom = ogr.CreateGeometryFromWkb(dumps(shapes[0]))
+
+feat.SetGeometry(geom)
+
+newlayer.CreateFeature(feat)
