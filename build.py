@@ -3,7 +3,7 @@ from osgeo import ogr
 from shapely.geos import lgeos
 from shapely.geometry.base import geom_factory
 from shapely.wkb import loads, dumps
-from shapely.geometry import LineString, MultiLineString
+from shapely.ops import polygonize
 from itertools import combinations
 
 class Field:
@@ -46,7 +46,7 @@ def load_datasource(filename):
 
     return Datasource(srs, geom_type, fields, values, shapes)
 
-def join_multiline_parts(shape):
+def linemerge(shape):
     """
     """
     if shape.type != 'MultiLineString':
@@ -72,7 +72,7 @@ for (i, j) in combinations(indexes, 2):
     if shape1.intersects(shape2):
         print feature1[4], 'and', feature2[4],
         
-        border = join_multiline_parts(shape1.intersection(shape2))
+        border = linemerge(shape1.intersection(shape2))
         shared[(i, j)] = border
         
         print '-', border.type, int(border.length), len(getattr(border, 'geoms', [None]))
@@ -104,27 +104,36 @@ for i in indexes:
 
 driver = ogr.GetDriverByName('ESRI Shapefile')
 source = driver.CreateDataSource('out.shp')
-newlayer = source.CreateLayer('default', datasource.srs, ogr.wkbLineString)
+newlayer = source.CreateLayer('default', datasource.srs, ogr.wkbPolygon)
 
 for field in datasource.fields:
     field_defn = ogr.FieldDefn(field.name, field.type)
     field_defn.SetWidth(field.width)
     newlayer.CreateField(field_defn)
 
-for (i, shape) in enumerate(unshared):
-    if shape.type not in ('LineString', 'MultiLineString'):
-        continue
+for i in indexes:
 
+    #
+
+    parts = [border for (key, border) in shared.items() if i in key] + [unshared[i]]
+    lines = []
+    
+    for part in parts:
+        for geom in getattr(part, 'geoms', None) or [part]:
+            if geom.type == 'LineString':
+                lines.append(geom)
+    
+    poly = polygonize(lines).next()
+
+    #
+    
     feat = ogr.Feature(newlayer.GetLayerDefn())
     
     for (j, field) in enumerate(datasource.fields):
         feat.SetField(field.name, datasource.values[i][j])
     
-    geom = ogr.CreateGeometryFromWkb(dumps(shape))
+    geom = ogr.CreateGeometryFromWkb(dumps(poly))
     
     feat.SetGeometry(geom)
 
     newlayer.CreateFeature(feat)
-
-    if shape.type == 'MultiLineString':
-        print len(shape.geoms), datasource.values[i][4]
