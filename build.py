@@ -105,7 +105,8 @@ def simplify(shape, tolerance, depth=0):
 datasource = load_datasource(argv[1])
 indexes = range(len(datasource.values))
 
-shared, comparison, comparisons = {}, 0, len(indexes)**2 / 2
+graph, shared = {}, [[] for i in indexes]
+comparison, comparisons = 0, len(indexes)**2 / 2
 
 for (i, j) in combinations(indexes, 2):
 
@@ -117,11 +118,16 @@ for (i, j) in combinations(indexes, 2):
         print >> stderr, 'feature #%d and #%d' % (i, j),
         
         border = linemerge(shape1.intersection(shape2))
-        shared[(i, j)] = border
+
+        graph[(i, j)] = True
+        shared[i].append(border)
+        shared[j].append(border)
         
         print >> stderr, '-', border.type
 
     comparison += 1
+
+print >> stderr, 'Making unshared borders...'
 
 unshared = []
 
@@ -129,24 +135,21 @@ for i in indexes:
 
     boundary = datasource.shapes[i].boundary
     
-    for (key, border) in shared.items():
-        if i in key:
-            boundary = boundary.difference(border)
+    for border in shared[i]:
+        boundary = boundary.difference(border)
 
     unshared.append(boundary)
 
+print >> stderr, 'Checking lengths...'
+
 for i in indexes:
 
-    shared_lengths = [border.length for (key, border) in shared.items() if i in key]
-    
-    print datasource.values[i][4],
-    print datasource.shapes[i].type, int(datasource.shapes[i].length),
-    print '=', unshared[i].type, int(unshared[i].length),
-    print '+', map(int, shared_lengths),
-    print '=', int(unshared[i].length + sum(shared_lengths))
+    shared_lengths = [border.length for border in shared[i]]
     
     tolerance, error = 0.000001, abs(datasource.shapes[i].length - unshared[i].length - sum(shared_lengths))
-    assert error < tolerance, 'Error too large: %(error).8f > %(tolerance).8f' % locals()
+    assert error < tolerance, 'Feature #%(i)d error too large: %(error).8f > %(tolerance).8f' % locals()
+
+print >> stderr, 'Building output...'
 
 driver = ogr.GetDriverByName('ESRI Shapefile')
 source = driver.CreateDataSource('out.shp')
@@ -157,13 +160,13 @@ for field in datasource.fields:
     field_defn.SetWidth(field.width)
     newlayer.CreateField(field_defn)
 
-tolerance = 500 # 650 is a problem for co2000p020-CA-merc.shp
+tolerance = 650 # 650 is a problem for co2000p020-CA-merc.shp
 
 for i in indexes:
 
     #
 
-    parts = [border for (key, border) in shared.items() if i in key] + [unshared[i]]
+    parts = shared[i] + [unshared[i]]
     lines = []
     
     for part in parts:
@@ -180,7 +183,9 @@ for i in indexes:
         lost_portion = lost_area / (tolerance ** 2)
         
         if lost_portion > 5:
-            raise Warning('Lost feature #%(i)d, %(lost_portion)d times larger than maximum tolerance' % locals())
+            #raise Warning('Lost feature #%(i)d, %(lost_portion)d times larger than maximum tolerance' % locals())
+            print >> stderr, 'Lost feature #%(i)d, %(lost_portion)d times larger than maximum tolerance' % locals()
+            continue
         
         print >> stderr, 'Skipped feature #%(i)d' % locals()
         continue
