@@ -1,6 +1,7 @@
 from sys import argv, exit
 from osgeo import ogr
 from shapely.geos import lgeos
+from shapely.geometry import LineString, Polygon
 from shapely.geometry.base import geom_factory
 from shapely.wkb import loads, dumps
 from shapely.ops import polygonize
@@ -55,6 +56,51 @@ def linemerge(shape):
     # copied from shapely.ops.linemerge at http://github.com/sgillies/shapely
     result = lgeos.GEOSLineMerge(shape._geom)
     return geom_factory(result)
+
+def simplify(shape, tolerance, depth=0):
+    """
+    """
+    if shape.type != 'LineString':
+        return shape
+    
+    coords = list(shape.coords)
+    
+    if len(coords) <= 2:
+        # don't shorten the too-short
+        return shape
+    
+    # For each coordinate that forms the apex of a three-coordinate
+    # triangle, find the area of that triangle and put it into a list
+    # along with the coordinate index, ordered from smallest to largest.
+
+    triples = [(i + 1, coords[i], coords[i + 1], coords[i + 2]) for i in range(len(coords) - 2)]
+    triangles = [(i, Polygon([c1, c2, c3, c1])) for (i, c1, c2, c3) in triples]
+    areas = sorted( [(triangle.area, i) for (i, triangle) in triangles] )
+    
+    preserved, min_area = set(), tolerance ** 2
+    
+    if areas[0][0] > min_area:
+        # there's nothing to be done
+        return shape
+    
+    # Remove any coordinate that makes a triangle whose area is
+    # below the minimum threshold, starting with the smallest and
+    # working up. Mark points to be preserved until the recursive
+    # call to simplify().
+
+    for (area, index) in areas:
+        if area > min_area:
+            break
+    
+        if index in preserved:
+            continue
+        
+        coords[index] = None
+        preserved.add(index + 1)
+        preserved.add(index - 1)
+    
+    coords = [coord for coord in coords if coord is not None]
+    return simplify(LineString(coords), tolerance, depth + 1)
 
 datasource = load_datasource(argv[1])
 indexes = range(len(datasource.values))
@@ -111,6 +157,8 @@ for field in datasource.fields:
     field_defn.SetWidth(field.width)
     newlayer.CreateField(field_defn)
 
+tolerance = 500 # 650 is a problem for co2000p020-CA-merc.shp
+
 for i in indexes:
 
     #
@@ -121,9 +169,14 @@ for i in indexes:
     for part in parts:
         for geom in getattr(part, 'geoms', None) or [part]:
             if geom.type == 'LineString':
-                lines.append(geom)
-    
-    poly = polygonize(lines).next()
+                lines.append(simplify(geom, tolerance))
+
+    try:
+        poly = polygonize(lines).next()
+    except StopIteration:
+        # I guess this one doesn't get included
+        print 'Skip', i, (tolerance ** 2), 'vs.', datasource.shapes[i].area, (datasource.shapes[i].area / (tolerance ** 2))
+        continue
 
     #
     
