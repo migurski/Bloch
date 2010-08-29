@@ -71,12 +71,13 @@ def simplify(shape, tolerance, depth=0):
     
     # For each coordinate that forms the apex of a three-coordinate
     # triangle, find the area of that triangle and put it into a list
-    # along with the coordinate index, ordered from smallest to largest.
+    # along with the coordinate index and the resulting line if the
+    # triangle were flattened, ordered from smallest to largest.
 
     triples = [(i + 1, coords[i], coords[i + 1], coords[i + 2]) for i in range(len(coords) - 2)]
-    triangles = [(i, Polygon([c1, c2, c3, c1])) for (i, c1, c2, c3) in triples]
-    areas = sorted( [(triangle.area, i) for (i, triangle) in triangles] )
-    
+    triangles = [(i, Polygon([c1, c2, c3, c1]), LineString([c1, c3])) for (i, c1, c2, c3) in triples]
+    areas = sorted( [(triangle.area, i, line) for (i, triangle, line) in triangles] )
+
     preserved, min_area = set(), tolerance ** 2
     
     if areas[0][0] > min_area:
@@ -88,16 +89,23 @@ def simplify(shape, tolerance, depth=0):
     # working up. Mark points to be preserved until the recursive
     # call to simplify().
 
-    for (area, index) in areas:
+    for (area, index, line) in areas:
         if area > min_area:
+            # there won't be any more points to remove.
             break
     
         if index in preserved:
+            # the current point is too close to a previously-preserved one.
+            continue
+        
+        preserved.add(index + 1)
+        preserved.add(index - 1)
+
+        if line.crosses(shape):
+            # removing this point would result in an invalid geometry.
             continue
         
         coords[index] = None
-        preserved.add(index + 1)
-        preserved.add(index - 1)
     
     coords = [coord for coord in coords if coord is not None]
     return simplify(LineString(coords), tolerance, depth + 1)
