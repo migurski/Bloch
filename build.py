@@ -105,23 +105,23 @@ def simplify(shape, tolerance, depth=0):
 datasource = load_datasource(argv[1])
 indexes = range(len(datasource.values))
 
-shared = {}
+shared, comparison, comparisons = {}, 0, len(indexes)**2 / 2
 
 for (i, j) in combinations(indexes, 2):
 
-    feature1 = datasource.values[i]
-    feature2 = datasource.values[j]
-    
     shape1 = datasource.shapes[i]
     shape2 = datasource.shapes[j]
     
     if shape1.intersects(shape2):
-        print feature1[4], 'and', feature2[4],
+        print >> stderr, '%.2f%% -' % (100. * comparison/comparisons),
+        print >> stderr, 'feature #%d and #%d' % (i, j),
         
         border = linemerge(shape1.intersection(shape2))
         shared[(i, j)] = border
         
-        print '-', border.type, int(border.length), len(getattr(border, 'geoms', [None]))
+        print >> stderr, '-', border.type
+
+    comparison += 1
 
 unshared = []
 
