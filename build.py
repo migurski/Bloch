@@ -1,4 +1,4 @@
-from sys import argv, exit
+from sys import argv, stderr
 from osgeo import ogr
 from shapely.geos import lgeos
 from shapely.geometry import LineString, Polygon
@@ -175,7 +175,14 @@ for i in indexes:
         poly = polygonize(lines).next()
     except StopIteration:
         # I guess this one doesn't get included
-        print 'Skip', i, (tolerance ** 2), 'vs.', datasource.shapes[i].area, (datasource.shapes[i].area / (tolerance ** 2))
+        
+        lost_area = datasource.shapes[i].area
+        lost_portion = lost_area / (tolerance ** 2)
+        
+        if lost_portion > 5:
+            raise Warning('Lost feature #%(i)d, %(lost_portion)d times larger than maximum tolerance' % locals())
+        
+        print >> stderr, 'Skipped feature #%(i)d' % locals()
         continue
 
     #
