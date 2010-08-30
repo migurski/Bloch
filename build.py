@@ -78,17 +78,19 @@ def simplify(shape, tolerance, cross_check):
     triangles = [(i, Polygon([c1, c2, c3, c1]), c1, c3) for (i, c1, c2, c3) in triples]
     areas = sorted( [(triangle.area, i, c1, c3) for (i, triangle, c1, c3) in triangles] )
 
-    preserved, min_area = set(), tolerance ** 2
+    min_area = tolerance ** 2
     
     if areas[0][0] > min_area:
         # there's nothing to be done
         return shape
     
+    preserved, popped = set(), False
+    
     # Remove any coordinate that makes a triangle whose area is
     # below the minimum threshold, starting with the smallest and
     # working up. Mark points to be preserved until the recursive
     # call to simplify().
-
+    
     for (area, index, ca, cb) in areas:
         if area > min_area:
             # there won't be any more points to remove.
@@ -105,13 +107,21 @@ def simplify(shape, tolerance, cross_check):
             # removing this point would result in an invalid geometry.
             continue
         
-        coords[index] = None
+        coords[index], popped = None, True
     
     coords = [coord for coord in coords if coord is not None]
+    
+    if not popped:
+        return shape
+    
     return simplify(LineString(coords), tolerance, cross_check)
+
+print >> stderr, 'Loading data...'
 
 datasource = load_datasource(argv[1])
 indexes = range(len(datasource.values))
+
+print >> stderr, 'Making shared borders...'
 
 graph, shared = {}, [[] for i in indexes]
 comparison, comparisons = 0, len(indexes)**2 / 2
