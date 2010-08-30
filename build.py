@@ -175,7 +175,7 @@ err_layer = err_source.CreateLayer('default', datasource.srs, ogr.wkbMultiLineSt
 
 out_driver = ogr.GetDriverByName('ESRI Shapefile')
 out_source = out_driver.CreateDataSource('out.shp')
-out_layer = out_source.CreateLayer('default', datasource.srs, ogr.wkbPolygon)
+out_layer = out_source.CreateLayer('default', datasource.srs, ogr.wkbMultiPolygon)
 
 for field in datasource.fields:
     for a_layer in (out_layer, err_layer):
