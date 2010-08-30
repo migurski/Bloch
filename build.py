@@ -57,7 +57,7 @@ def linemerge(shape):
     result = lgeos.GEOSLineMerge(shape._geom)
     return geom_factory(result)
 
-def simplify(shape, tolerance, depth=0):
+def simplify(shape, tolerance, cross_check):
     """
     """
     if shape.type != 'LineString':
@@ -75,8 +75,8 @@ def simplify(shape, tolerance, depth=0):
     # triangle were flattened, ordered from smallest to largest.
 
     triples = [(i + 1, coords[i], coords[i + 1], coords[i + 2]) for i in range(len(coords) - 2)]
-    triangles = [(i, Polygon([c1, c2, c3, c1]), LineString([c1, c3])) for (i, c1, c2, c3) in triples]
-    areas = sorted( [(triangle.area, i, line) for (i, triangle, line) in triangles] )
+    triangles = [(i, Polygon([c1, c2, c3, c1]), c1, c3) for (i, c1, c2, c3) in triples]
+    areas = sorted( [(triangle.area, i, c1, c3) for (i, triangle, c1, c3) in triangles] )
 
     preserved, min_area = set(), tolerance ** 2
     
@@ -89,7 +89,7 @@ def simplify(shape, tolerance, depth=0):
     # working up. Mark points to be preserved until the recursive
     # call to simplify().
 
-    for (area, index, line) in areas:
+    for (area, index, ca, cb) in areas:
         if area > min_area:
             # there won't be any more points to remove.
             break
@@ -101,14 +101,14 @@ def simplify(shape, tolerance, depth=0):
         preserved.add(index + 1)
         preserved.add(index - 1)
 
-        if line.crosses(shape):
+        if cross_check and LineString([ca, cb]).crosses(shape):
             # removing this point would result in an invalid geometry.
             continue
         
         coords[index] = None
     
     coords = [coord for coord in coords if coord is not None]
-    return simplify(LineString(coords), tolerance, depth + 1)
+    return simplify(LineString(coords), tolerance, cross_check)
 
 datasource = load_datasource(argv[1])
 indexes = range(len(datasource.values))
@@ -173,11 +173,11 @@ for field in datasource.fields:
         field_defn.SetWidth(field.width)
         a_layer.CreateField(field_defn)
 
-tolerance = 650 # 650 is a problem for co2000p020-CA-merc.shp
+tolerance = 1000
 
 for i in indexes:
 
-    #
+    # Build up a list of linestrings that we will attempt to polygonize.
 
     parts = shared[i] + [unshared[i]]
     lines = []
@@ -185,18 +185,37 @@ for i in indexes:
     for part in parts:
         for geom in getattr(part, 'geoms', None) or [part]:
             if geom.type == 'LineString':
-                lines.append(simplify(geom, tolerance))
+                lines.append(geom)
 
     try:
-        poly = polygonize(lines).next()
+        # Try simplify without cross-checks because it's cheap and fast.
+        simple_lines = [simplify(line, tolerance, False) for line in lines]
+        poly = polygonize(simple_lines).next()
 
     except StopIteration:
-        # I guess this one doesn't get included
+        # A polygon wasn't found, for one of two reasons we're interested in:
+        # the shape would be too small to show up with the given tolerance, or
+        # the simplification resulted in an invalid, self-intersecting shape.
         
         lost_area = datasource.shapes[i].area
         lost_portion = lost_area / (tolerance ** 2)
         
-        if lost_portion > 5:
+        if lost_portion < 4:
+            # It's just small.
+            print >> stderr, 'Skipped small feature #%(i)d' % locals()
+            continue
+
+        # A large lost_portion is a warning sign that we have an invalid polygon.
+        
+        try:
+            # Try simplify again with cross-checks because it's slow but careful.
+            simple_lines = [simplify(line, tolerance, True) for line in lines]
+            poly = polygonize(simple_lines).next()
+
+        except StopIteration:
+            # Again no polygon was found, which now probably means we have
+            # an actual error that should be saved to the error output file.
+    
             #raise Warning('Lost feature #%(i)d, %(lost_portion)d times larger than maximum tolerance' % locals())
             print >> stderr, 'Lost feature #%(i)d, %(lost_portion)d times larger than maximum tolerance' % locals()
     
@@ -215,10 +234,6 @@ for i in indexes:
 
             continue
         
-        print >> stderr, 'Skipped feature #%(i)d' % locals()
-    
-        continue
-
     #
     
     feat = ogr.Feature(out_layer.GetLayerDefn())
