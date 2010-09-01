@@ -1,5 +1,6 @@
 from sys import argv, stderr
 from osgeo import ogr
+from rtree import Rtree
 from shapely.geos import lgeos
 from shapely.geometry import MultiLineString, LineString, Polygon
 from shapely.geometry.base import geom_factory
@@ -57,17 +58,18 @@ def linemerge(shape):
     result = lgeos.GEOSLineMerge(shape._geom)
     return geom_factory(result)
 
-def simplify(shape, tolerance, cross_check):
+def simplify(original_shape, tolerance, cross_check):
     """
     """
-    if shape.type != 'LineString':
-        return shape
+    if original_shape.type != 'LineString':
+        return original_shape
     
-    coords = list(shape.coords)
+    coords = list(original_shape.coords)
+    new_coords = coords[:]
     
     if len(coords) <= 2:
         # don't shorten the too-short
-        return shape
+        return original_shape
     
     # For each coordinate that forms the apex of a three-coordinate
     # triangle, find the area of that triangle and put it into a list
@@ -82,7 +84,18 @@ def simplify(shape, tolerance, cross_check):
     
     if areas[0][0] > min_area:
         # there's nothing to be done
-        return shape
+        return original_shape
+    
+    if cross_check:
+        rtree = Rtree()
+    
+        # We check for intersections by building up an R-Tree index of each
+        # and every line segment that makes up the original shape, and then
+        # quickly doing collision checks against these.
+    
+        for j in range(len(coords) - 1):
+            (x1, y1), (x2, y2) = coords[j], coords[j + 1]
+            rtree.add(j, (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)))
     
     preserved, popped = set(), False
     
@@ -103,18 +116,40 @@ def simplify(shape, tolerance, cross_check):
         preserved.add(index + 1)
         preserved.add(index - 1)
 
-        if cross_check and LineString([ca, cb]).crosses(shape):
-            # removing this point would result in an invalid geometry.
-            continue
+        if cross_check:
         
-        coords[index], popped = None, True
+            # This is potentially a very expensive check, so we use the R-Tree
+            # index we made earlier to rapidly cut down on the number of lines
+            # from the original shape to check for collisions.
+        
+            (x1, y1), (x2, y2) = ca, cb
+            new_line = LineString([ca, cb])
+
+            box_ids = rtree.intersection((min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)))
+            old_lines = [LineString(coords[j:j+2]) for j in box_ids]
+            
+            # Will removing this point result in an invalid geometry?
+
+            if True in [old_line.crosses(new_line) for old_line in old_lines]:
+                # Yes, because the index told us so.
+                continue
+
+            if new_line.crosses(original_shape):
+                # Yes, because we painstakingly checked against the original shape.
+                continue
+        
+        # It's safe to remove this point
+        new_coords[index], popped = None, True
     
-    coords = [coord for coord in coords if coord is not None]
+    new_coords = [coord for coord in new_coords if coord is not None]
+    
+    if cross_check:
+        print 'simplify', len(coords), 'to', len(new_coords)
     
     if not popped:
-        return shape
+        return original_shape
     
-    return simplify(LineString(coords), tolerance, cross_check)
+    return simplify(LineString(new_coords), tolerance, cross_check)
 
 print >> stderr, 'Loading data...'
 
@@ -171,10 +206,12 @@ print >> stderr, 'Building output...'
 
 err_driver = ogr.GetDriverByName('ESRI Shapefile')
 err_source = err_driver.CreateDataSource('err.shp')
+assert err_source is not None, 'Failed creation of err.shp'
 err_layer = err_source.CreateLayer('default', datasource.srs, ogr.wkbMultiLineString)
 
 out_driver = ogr.GetDriverByName('ESRI Shapefile')
 out_source = out_driver.CreateDataSource('out.shp')
+assert out_source is not None, 'Failed creation of out.shp'
 out_layer = out_source.CreateLayer('default', datasource.srs, ogr.wkbMultiPolygon)
 
 for field in datasource.fields:
@@ -183,7 +220,7 @@ for field in datasource.fields:
         field_defn.SetWidth(field.width)
         a_layer.CreateField(field_defn)
 
-tolerance = 1000
+tolerance = 650
 
 for i in indexes:
 
