@@ -256,7 +256,66 @@ for i in indexes:
         
         try:
             # Try simplify again with cross-checks because it's slow but careful.
-            simple_lines = [simplify(line, tolerance, True) for line in lines]
+            simple_lines = [simplify(line, tolerance, False) for line in lines]
+            print simple_lines
+            
+            def end_to_end(lines, depth=0):
+                """
+                """
+                joined = False
+                indexes = range(len(lines))
+                removed = set()
+                
+                print depth, sum([line.length for line in lines]),
+                
+                for (i, j) in combinations(indexes, 2):
+                    if i in removed or j in removed:
+                        continue
+                
+                    if lines[i].intersects(lines[j]):
+                        if lines[i].intersection(lines[j]).type in ('Point', 'MultiPoint'):
+                            print (i, j), 
+                        
+                            coordsA = list(lines[i].coords)
+                            coordsB = list(lines[j].coords)
+                            
+                            if coordsA[-1] == coordsB[0]:
+                                lines[i] = LineString(coordsA[:-1] + coordsB)
+
+                            elif coordsA[-1] == coordsB[-1]:
+                                coordsB.reverse()
+                                lines[i] = LineString(coordsA[:-1] + coordsB)
+
+                            elif coordsB[-1] == coordsA[0]:
+                                lines[i] = LineString(coordsB[:-1] + coordsA)
+
+                            elif coordsB[-1] == coordsA[-1]:
+                                coordsA.reverse()
+                                lines[i] = LineString(coordsB[:-1] + coordsA)
+
+                            else:
+                                print 'wait',
+                                continue
+                            
+                            lines[j] = None
+                            removed.add(j)
+                            joined = True
+                
+                lines = [line for line in lines if line is not None]
+                
+                print 'to', sum([line.length for line in lines]), 'in', len(lines), 'lines'
+
+                if joined:
+                    lines = end_to_end(lines, depth + 1)
+                else:
+                    print [(map(int, coords[0]), map(int, coords[-1])) for coords in [list(line.coords) for line in lines]]
+                    print depth, 'done.'
+                
+                return lines
+            
+            simple_lines = end_to_end(simple_lines[:])
+            
+            raise StopIteration
             poly = polygonize(simple_lines).next()
 
         except StopIteration:
@@ -271,7 +330,7 @@ for i in indexes:
             for (j, field) in enumerate(datasource.fields):
                 feat.SetField(field.name, datasource.values[i][j])
             
-            multiline = MultiLineString([list(line.coords) for line in lines])
+            multiline = MultiLineString([list(line.coords) for line in simple_lines])
             
             geom = ogr.CreateGeometryFromWkb(dumps(multiline))
             
