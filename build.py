@@ -289,6 +289,7 @@ for i in indexes:
                 lines.append(geom)
 
     try:
+        raise StopIteration
         # Try simplify without cross-checks because it's cheap and fast.
         simple_lines = [simplify(line, tolerance, False) for line in lines]
         poly = polygonize(simple_lines).next()
@@ -309,12 +310,14 @@ for i in indexes:
         # A large lost_portion is a warning sign that we have an invalid polygon.
         
         try:
+            def polygulate(lines):
+                munged_lines = linemunge(lines[:])
+            
+                raise StopIteration
+        
             # Try simplify again with cross-checks because it's slow but careful.
             simple_lines = [simplify(line, tolerance, False) for line in lines]
-            munged_lines = linemunge(simple_lines[:])
-            
-            raise StopIteration
-            poly = polygonize(simple_lines).next()
+            poly = polygulate(simple_lines).next()
 
         except StopIteration:
             # Again no polygon was found, which now probably means we have
@@ -328,7 +331,7 @@ for i in indexes:
             for (j, field) in enumerate(datasource.fields):
                 feat.SetField(field.name, datasource.values[i][j])
             
-            multiline = MultiLineString([list(line.coords) for line in munged_lines])
+            multiline = MultiLineString([list(line.coords) for line in simple_lines])
             
             geom = ogr.CreateGeometryFromWkb(dumps(multiline))
             
@@ -336,6 +339,8 @@ for i in indexes:
         
             err_layer.CreateFeature(feat)
 
+            break
+            
             continue
         
     #
@@ -350,3 +355,5 @@ for i in indexes:
     feat.SetGeometry(geom)
 
     out_layer.CreateFeature(feat)
+    
+    break
