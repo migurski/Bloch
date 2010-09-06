@@ -6,7 +6,7 @@ from shapely.geometry import MultiLineString, LineString, Polygon
 from shapely.geometry.base import geom_factory
 from shapely.wkb import loads, dumps
 from shapely.ops import polygonize
-from itertools import combinations
+from itertools import combinations, permutations
 
 class Field:
     """
@@ -289,10 +289,14 @@ for i in indexes:
                 lines.append(geom)
 
     try:
-        raise StopIteration
         # Try simplify without cross-checks because it's cheap and fast.
         simple_lines = [simplify(line, tolerance, False) for line in lines]
+        line_lengths = int(sum([l.length for l in simple_lines]))
+
         poly = polygonize(simple_lines).next()
+        
+        if poly.length < line_lengths:
+            raise StopIteration
 
     except StopIteration:
         # A polygon wasn't found, for one of two reasons we're interested in:
@@ -310,8 +314,43 @@ for i in indexes:
         # A large lost_portion is a warning sign that we have an invalid polygon.
         
         try:
+            def assemble(polygons, depth=0):
+                """
+                """
+                popped = True
+                
+                while popped:
+                
+                    popped = False
+                    removed = set()
+                    indexes = range(len(polygons))
+                    
+                    for (i, j) in permutations(indexes, 2):
+                        if i in removed or j in removed:
+                            continue
+                        
+                        if polygons[i].contains(polygons[j]):
+                            print i, '=', i, '-', j
+                            polygons[i] = polygons[i].difference(polygons[j])
+                            popped = True
+                            removed.add(j)
+                            polygons[j] = None
+                
+                    polygons = [poly for poly in polygons if poly is not None]
+                
+                print [(p, p.area) for p in polygons]
+                return polygons
+        
             def polygulate(lines):
+                """
+                """
                 munged_lines = linemunge(lines[:])
+                
+                line_coords = [list(line.coords) for line in munged_lines]
+                poly_coords = [c for c in line_coords if c[0] == c[-1] and len(c) >= 3]
+                polygons = [Polygon(coords) for coords in poly_coords]
+                
+                yield assemble(polygons)[0]
             
                 raise StopIteration
         
@@ -338,8 +377,6 @@ for i in indexes:
             feat.SetGeometry(geom)
         
             err_layer.CreateFeature(feat)
-
-            break
             
             continue
         
@@ -355,5 +392,3 @@ for i in indexes:
     feat.SetGeometry(geom)
 
     out_layer.CreateFeature(feat)
-    
-    break
