@@ -330,15 +330,25 @@ for i in indexes:
                             continue
                         
                         if polygons[i].contains(polygons[j]):
-                            print i, '=', i, '-', j
-                            polygons[i] = polygons[i].difference(polygons[j])
-                            popped = True
+                            try:
+                                poly1, poly2 = polygons[i], polygons[j]
+
+                                exterior = list(poly1.exterior.coords)
+                                interiors = [list(r.coords) for r in poly1.interiors]
+                                interiors += [list(poly2.exterior.coords)]
+
+                                polygons[i] = Polygon(exterior, interiors)
+                            except Exception, e:
+                                print i, '=', i, '-', j, '= Error', e
+                                pass
+                            else:
+                                print i, '=', i, '-', j
+                                popped = True
                             removed.add(j)
                             polygons[j] = None
                 
                     polygons = [poly for poly in polygons if poly is not None]
                 
-                print [(p, p.area) for p in polygons]
                 return polygons
         
             def polygulate(lines):
@@ -346,17 +356,24 @@ for i in indexes:
                 """
                 munged_lines = linemunge(lines[:])
                 
+                print len(munged_lines), 'lines?'
                 line_coords = [list(line.coords) for line in munged_lines]
                 poly_coords = [c for c in line_coords if c[0] == c[-1] and len(c) >= 3]
+                print len(poly_coords), 'polygons?'
                 polygons = [Polygon(coords) for coords in poly_coords]
                 
+                print len(polygons), 'polygons'
                 yield assemble(polygons)[0]
             
                 raise StopIteration
         
             # Try simplify again with cross-checks because it's slow but careful.
             simple_lines = [simplify(line, tolerance, False) for line in lines]
-            poly = polygulate(simple_lines).next()
+            try:
+                poly = polygulate(simple_lines).next()
+            except Exception, e:
+                print e
+                raise StopIteration
 
         except StopIteration:
             # Again no polygon was found, which now probably means we have
