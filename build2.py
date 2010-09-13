@@ -1,6 +1,7 @@
 from sys import argv, stderr, exit
 from osgeo import ogr
 from rtree import Rtree
+from rtree.core import RTreeError
 from shapely.geos import lgeos
 from shapely.geometry import MultiLineString, LineString, Polygon
 from shapely.geometry.base import geom_factory
@@ -239,7 +240,6 @@ rtree = Rtree()
 
 print >> stderr, 'Making shared borders...'
 
-line_id = 0
 graph, shared = {}, [[] for i in indexes]
 comparison, comparisons = 0, len(indexes)**2 / 2
 
@@ -258,6 +258,13 @@ for (i, j) in combinations(indexes, 2):
         
         print >> stderr, sum( [len(list(g.coords)) for g in geoms] ), 'coords',
         
+        try:
+            line_id = rtree.count(rtree.get_bounds())
+        except RTreeError:
+            line_id = 0
+
+        print >> stderr, '-', line_id,
+
         for geom in geoms:
             coords = list(geom.coords)
             segments = [coords[i:i+2] for i in range(len(coords) - 1)]
@@ -268,11 +275,9 @@ for (i, j) in combinations(indexes, 2):
                               VALUES (?, ?, ?, ?, ?, ?, ?)""",
                            (i, j, line_id, x1, y1, x2, y2))
                 
-                # rtree.insert(-----, (
-            
-            line_id += 1
+                xmin, ymin, xmax, ymax = min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
+                rtree.add(db.lastrowid, (xmin, ymin, xmax, ymax))
         
-
         graph[(i, j)] = True
         shared[i].append(border)
         shared[j].append(border)
