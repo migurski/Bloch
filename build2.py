@@ -1,4 +1,4 @@
-from sys import argv, stderr
+from sys import argv, stderr, exit
 from osgeo import ogr
 from rtree import Rtree
 from shapely.geos import lgeos
@@ -7,6 +7,7 @@ from shapely.geometry.base import geom_factory
 from shapely.wkb import loads, dumps
 from shapely.ops import polygonize
 from itertools import combinations, permutations
+from sqlite3 import connect
 
 class Field:
     """
@@ -210,8 +211,35 @@ print >> stderr, 'Loading data...'
 datasource = load_datasource(argv[1])
 indexes = range(len(datasource.values))
 
+# guid, src1_id, src2_id, line_id, x1, y1, x2, y2
+
+db = connect(':memory:').cursor()
+
+db.execute("""CREATE table segments (
+                
+                -- global identifier for this segment
+                guid    INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                -- identifiers for source shape or shapes for shared borders
+                src1_id INTEGER,
+                src2_id INTEGER,
+                
+                -- global identifier for this line
+                line_id INTEGER,
+                
+                -- start and end coordinates for this segment
+                x1      REAL,
+                y1      REAL,
+                x2      REAL,
+                y2      REAL
+
+              )""")
+
+rtree = Rtree()
+
 print >> stderr, 'Making shared borders...'
 
+line_id = 0
 graph, shared = {}, [[] for i in indexes]
 comparison, comparisons = 0, len(indexes)**2 / 2
 
@@ -224,7 +252,26 @@ for (i, j) in combinations(indexes, 2):
         print >> stderr, '%.2f%% -' % (100. * comparison/comparisons),
         print >> stderr, 'feature #%d and #%d' % (i, j),
         
-        border = linemerge(shape1.intersection(shape2))
+        border = shape1.intersection(shape2)
+        
+        geoms = hasattr(border, 'geoms') and border.geoms or [border]
+        
+        print >> stderr, sum( [len(list(g.coords)) for g in geoms] ), 'coords',
+        
+        for geom in geoms:
+            coords = list(geom.coords)
+            segments = [coords[i:i+2] for i in range(len(coords) - 1)]
+            
+            for ((x1, y1), (x2, y2)) in segments:
+                db.execute("""INSERT INTO segments
+                              (src1_id, src2_id, line_id, x1, y1, x2, y2)
+                              VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                           (i, j, line_id, x1, y1, x2, y2))
+                
+                # rtree.insert(-----, (
+            
+            line_id += 1
+        
 
         graph[(i, j)] = True
         shared[i].append(border)
@@ -233,6 +280,11 @@ for (i, j) in combinations(indexes, 2):
         print >> stderr, '-', border.type
 
     comparison += 1
+
+for row in db.execute('SELECT * FROM segments LIMIT 20'):
+    print row
+
+exit() #------------------------------------------------------------------------
 
 print >> stderr, 'Making unshared borders...'
 
@@ -255,6 +307,8 @@ for i in indexes:
     
     tolerance, error = 0.000001, abs(datasource.shapes[i].length - unshared[i].length - sum(shared_lengths))
     assert error < tolerance, 'Feature #%(i)d error too large: %(error).8f > %(tolerance).8f' % locals()
+
+exit()
 
 print >> stderr, 'Building output...'
 
