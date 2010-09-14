@@ -27,6 +27,40 @@ class Datasource:
         self.geom_type = geom_type
         self.values = values
         self.shapes = shapes
+        
+        # guid, src1_id, src2_id, line_id, x1, y1, x2, y2
+        
+        db = connect(':memory:').cursor()
+        
+        db.execute("""CREATE table segments (
+                        
+                        -- global identifier for this segment
+                        guid    INTEGER PRIMARY KEY AUTOINCREMENT,
+        
+                        -- identifiers for source shape or shapes for shared borders
+                        src1_id INTEGER,
+                        src2_id INTEGER,
+                        
+                        -- global identifier for this line
+                        line_id INTEGER,
+                        
+                        -- start and end coordinates for this segment
+                        x1      REAL,
+                        y1      REAL,
+                        x2      REAL,
+                        y2      REAL
+        
+                      )""")
+        
+        db.execute('CREATE INDEX segments_lines ON segments (line_id, guid)')
+        db.execute('CREATE INDEX shape1_lines ON segments (src1_id, line_id, guid)')
+        db.execute('CREATE INDEX shape2_lines ON segments (src2_id, line_id, guid)')
+        
+        self.db = db
+        self.rtree = Rtree()
+
+    def indexes(self):
+        return range(len(self.values))
 
 def load_datasource(filename):
     """
@@ -59,6 +93,93 @@ def linemerge(shape):
     # copied from shapely.ops.linemerge at http://github.com/sgillies/shapely
     result = lgeos.GEOSLineMerge(shape._geom)
     return geom_factory(result)
+
+def populate_shared_segments(datasource):
+    """
+    """
+    shared = [[] for i in datasource.indexes()]
+    comparison, comparisons = 0, len(datasource.indexes())**2 / 2
+    
+    for (i, j) in combinations(datasource.indexes(), 2):
+    
+        shape1 = datasource.shapes[i]
+        shape2 = datasource.shapes[j]
+        
+        if shape1.intersects(shape2):
+            print >> stderr, '%.2f%% -' % (100. * comparison/comparisons),
+            print >> stderr, 'feature #%d and #%d' % (i, j),
+            
+            border = linemerge(shape1.intersection(shape2))
+            
+            geoms = hasattr(border, 'geoms') and border.geoms or [border]
+            
+            print >> stderr, sum( [len(list(g.coords)) for g in geoms] ), 'coords',
+            
+            for geom in geoms:
+                try:
+                    line_id = datasource.rtree.count(datasource.rtree.get_bounds())
+                except RTreeError:
+                    line_id = 0
+        
+                print >> stderr, '-', 'line', line_id,
+        
+                coords = list(geom.coords)
+                segments = [coords[k:k+2] for k in range(len(coords) - 1)]
+                
+                for ((x1, y1), (x2, y2)) in segments:
+                    datasource.db.execute("""INSERT INTO segments
+                                             (src1_id, src2_id, line_id, x1, y1, x2, y2)
+                                             VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                                          (i, j, line_id, x1, y1, x2, y2))
+                    
+                    bbox = min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
+                    datasource.rtree.add(datasource.db.lastrowid, bbox)
+            
+            shared[i].append(border)
+            shared[j].append(border)
+            
+            print >> stderr, '-', border.type
+    
+        comparison += 1
+
+    return shared
+
+def populate_unshared_segments(datasource, shared):
+    """
+    """
+    for i in datasource.indexes():
+    
+        boundary = datasource.shapes[i].boundary
+        
+        for border in shared[i]:
+            boundary = boundary.difference(border)
+        
+        print >> stderr, i, boundary.type,
+    
+        geoms = hasattr(boundary, 'geoms') and boundary.geoms or [boundary]
+        geoms = [geom for geom in geoms if hasattr(geom, 'coords')]
+        
+        for geom in geoms:
+            try:
+                line_id = datasource.rtree.count(datasource.rtree.get_bounds())
+            except RTreeError:
+                line_id = 0
+    
+            print >> stderr, '-', 'line', line_id,
+    
+            coords = list(geom.coords)
+            segments = [coords[k:k+2] for k in range(len(coords) - 1)]
+            
+            for ((x1, y1), (x2, y2)) in segments:
+                datasource.db.execute("""INSERT INTO segments
+                                         (src1_id, line_id, x1, y1, x2, y2)
+                                         VALUES (?, ?, ?, ?, ?, ?)""",
+                                      (i, line_id, x1, y1, x2, y2))
+                
+                bbox = min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
+                datasource.rtree.add(datasource.db.lastrowid, bbox)
+    
+        print >> stderr, '.'
 
 def linemunge(lines, depth=0):
     """ Similar to linemerge(), but happy to return invalid linestrings.
@@ -208,129 +329,21 @@ def simplify(original_shape, tolerance, cross_check):
     return simplify(LineString(new_coords), tolerance, cross_check)
 
 print >> stderr, 'Loading data...'
-
 datasource = load_datasource(argv[1])
-indexes = range(len(datasource.values))
-
-# guid, src1_id, src2_id, line_id, x1, y1, x2, y2
-
-db = connect(':memory:').cursor()
-
-db.execute("""CREATE table segments (
-                
-                -- global identifier for this segment
-                guid    INTEGER PRIMARY KEY AUTOINCREMENT,
-
-                -- identifiers for source shape or shapes for shared borders
-                src1_id INTEGER,
-                src2_id INTEGER,
-                
-                -- global identifier for this line
-                line_id INTEGER,
-                
-                -- start and end coordinates for this segment
-                x1      REAL,
-                y1      REAL,
-                x2      REAL,
-                y2      REAL
-
-              )""")
-
-rtree = Rtree()
 
 print >> stderr, 'Making shared borders...'
-
-shared = [[] for i in indexes]
-comparison, comparisons = 0, len(indexes)**2 / 2
-
-for (i, j) in combinations(indexes, 2):
-
-    shape1 = datasource.shapes[i]
-    shape2 = datasource.shapes[j]
-    
-    if shape1.intersects(shape2):
-        print >> stderr, '%.2f%% -' % (100. * comparison/comparisons),
-        print >> stderr, 'feature #%d and #%d' % (i, j),
-        
-        border = linemerge(shape1.intersection(shape2))
-        
-        geoms = hasattr(border, 'geoms') and border.geoms or [border]
-        
-        print >> stderr, sum( [len(list(g.coords)) for g in geoms] ), 'coords',
-        
-        for geom in geoms:
-            try:
-                line_id = rtree.count(rtree.get_bounds())
-            except RTreeError:
-                line_id = 0
-    
-            print >> stderr, '-', 'line', line_id,
-    
-            coords = list(geom.coords)
-            segments = [coords[k:k+2] for k in range(len(coords) - 1)]
-            
-            for ((x1, y1), (x2, y2)) in segments:
-                db.execute("""INSERT INTO segments
-                              (src1_id, src2_id, line_id, x1, y1, x2, y2)
-                              VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                           (i, j, line_id, x1, y1, x2, y2))
-                
-                bbox = min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
-                rtree.add(db.lastrowid, bbox)
-        
-        shared[i].append(border)
-        shared[j].append(border)
-        
-        print >> stderr, '-', border.type
-
-    comparison += 1
+shared_borders = populate_shared_segments(datasource)
 
 print >> stderr, 'Making unshared borders...'
+populate_unshared_segments(datasource, shared_borders)
 
-for i in indexes:
+print len(datasource.indexes()), 'shapes.'
+print datasource.rtree.count(datasource.rtree.get_bounds()), 'guids (rtree).'
+print datasource.db.execute('SELECT COUNT(DISTINCT guid) FROM segments').fetchone()[0], 'guids (db).'
+print datasource.db.execute('SELECT COUNT(DISTINCT line_id) FROM segments').fetchone()[0], 'lines? (db)'
+print datasource.db.execute('SELECT COUNT(DISTINCT src1_id), COUNT(DISTINCT src2_id) FROM segments').fetchone(), 'shapes? (db)'
 
-    boundary = datasource.shapes[i].boundary
-    
-    for border in shared[i]:
-        boundary = boundary.difference(border)
-    
-    print >> stderr, i, boundary.type,
 
-    geoms = hasattr(boundary, 'geoms') and boundary.geoms or [boundary]
-    geoms = [geom for geom in geoms if hasattr(geom, 'coords')]
-    
-    for geom in geoms:
-        try:
-            line_id = rtree.count(rtree.get_bounds())
-        except RTreeError:
-            line_id = 0
-
-        print >> stderr, '-', 'line', line_id,
-
-        coords = list(geom.coords)
-        segments = [coords[k:k+2] for k in range(len(coords) - 1)]
-        
-        for ((x1, y1), (x2, y2)) in segments:
-            db.execute("""INSERT INTO segments
-                          (src1_id, line_id, x1, y1, x2, y2)
-                          VALUES (?, ?, ?, ?, ?, ?)""",
-                       (i, line_id, x1, y1, x2, y2))
-            
-            bbox = min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
-            rtree.add(db.lastrowid, bbox)
-
-    print >> stderr, '.'
-
-del shared
-
-for row in db.execute('SELECT * FROM segments LIMIT 20'):
-    print row
-    
-print len(indexes), 'shapes.'
-print rtree.count(rtree.get_bounds()), 'guids (rtree).'
-print db.execute('SELECT COUNT(DISTINCT guid) FROM segments').fetchone()[0], 'guids (db).'
-print db.execute('SELECT COUNT(DISTINCT line_id) FROM segments').fetchone()[0], 'lines? (db)'
-print db.execute('SELECT COUNT(DISTINCT src1_id), COUNT(DISTINCT src2_id) FROM segments').fetchone(), 'shapes? (db)'
 
 exit() #------------------------------------------------------------------------
 
