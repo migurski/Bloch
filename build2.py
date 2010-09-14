@@ -240,7 +240,7 @@ rtree = Rtree()
 
 print >> stderr, 'Making shared borders...'
 
-graph, shared = {}, [[] for i in indexes]
+shared = [[] for i in indexes]
 comparison, comparisons = 0, len(indexes)**2 / 2
 
 for (i, j) in combinations(indexes, 2):
@@ -278,7 +278,6 @@ for (i, j) in combinations(indexes, 2):
                 bbox = min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
                 rtree.add(db.lastrowid, bbox)
         
-        graph[(i, j)] = True
         shared[i].append(border)
         shared[j].append(border)
         
@@ -288,15 +287,13 @@ for (i, j) in combinations(indexes, 2):
 
 print >> stderr, 'Making unshared borders...'
 
-unshared = []
-
 for i in indexes:
 
     boundary = datasource.shapes[i].boundary
     
     for border in shared[i]:
         boundary = boundary.difference(border)
-
+    
     print >> stderr, i, boundary.type,
 
     geoms = hasattr(boundary, 'geoms') and boundary.geoms or [boundary]
@@ -323,8 +320,8 @@ for i in indexes:
             rtree.add(db.lastrowid, bbox)
 
     print >> stderr, '.'
-    
-    unshared.append(boundary)
+
+del shared
 
 for row in db.execute('SELECT * FROM segments LIMIT 20'):
     print row
