@@ -343,7 +343,77 @@ print datasource.db.execute('SELECT COUNT(DISTINCT guid) FROM segments').fetchon
 print datasource.db.execute('SELECT COUNT(DISTINCT line_id) FROM segments').fetchone()[0], 'lines? (db)'
 print datasource.db.execute('SELECT COUNT(DISTINCT src1_id), COUNT(DISTINCT src2_id) FROM segments').fetchone(), 'shapes? (db)'
 
+was = datasource.db.execute('SELECT COUNT(*) FROM segments').fetchone()
 
+line_ids = [line_id for (line_id, ) in datasource.db.execute('SELECT DISTINCT line_id FROM segments')]
+
+preserved = set()
+
+for line_id in line_ids:
+    
+    rows = datasource.db.execute("""SELECT guid, x1, y1, x2, y2
+                                    FROM segments
+                                    WHERE line_id = ?
+                                    ORDER BY guid""",
+                                 (line_id, ))
+    
+    pairs = [(guid, (x1, y1), (x2, y2)) for (guid, x1, y1, x2, y2) in rows]
+    triples = [(pairs[i][0], pairs[i+1][0], pairs[i][1], pairs[i][2], pairs[i+1][2]) for i in range(len(pairs) - 1)]
+    triangles = [(guid1, guid2, Polygon([c1, c2, c3, c1]), c1, c3) for (guid1, guid2, c1, c2, c3) in triples]
+    areas = sorted( [(triangle.area, guid1, guid2, c1, c3) for (guid1, guid2, triangle, c1, c3) in triangles] )
+    
+    min_area = 1000 ** 2
+    
+    if not areas or areas[0][0] > min_area:
+        continue
+    
+    for (area, guid1, guid2, ca, cb) in areas:
+        if area > min_area:
+            break
+        
+        if guid1 in preserved or guid2 in preserved:
+            continue
+
+        preserved.add(guid1)
+        preserved.add(guid2)
+        
+        def bbox(x1, y1, x2, y2):
+            return min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
+        
+        (x1, y1), (x2, y2) = ca, cb
+        new_line = LineString([ca, cb])
+
+        old_guids = datasource.rtree.intersection(bbox(x1, y1, x2, y2))
+        old_rows = datasource.db.execute('SELECT x1, y1, x2, y2 FROM segments WHERE guid IN (%s)' % ','.join(map(str, old_guids)))
+        old_lines = [LineString([(x1, y1), (x2, y2)]) for (x1, y1, x2, y2) in old_rows]
+        
+        if True in [new_line.crosses(old_line) for old_line in old_lines]:
+            print 'fuck'
+            continue
+        
+        def rem_guid(datasource, guid):
+            """
+            """
+            q = 'SELECT x1, y1, x2, y2 FROM segments WHERE guid = %d' % guid
+            (x1, y1, x2, y2) = datasource.db.execute(q).fetchone()
+            bbox = min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
+
+            datasource.rtree.delete(guid, bbox)
+
+        rem_guid(datasource, guid1)
+        rem_guid(datasource, guid2)
+        
+        x1, y1, x2, y2 = ca[0], ca[1], cb[0], cb[1]
+
+        datasource.db.execute('DELETE FROM segments WHERE guid = %d' % guid2)
+        datasource.db.execute('UPDATE segments SET x1=?, y1=?, x2=?, y2=? WHERE guid=?',
+                              (x1, y1, x2, y2, guid1))
+
+        datasource.rtree.add(guid1, bbox(x1, y1, x2, y2))
+        
+        print 'pop', guid2
+        
+print was, '-->', datasource.db.execute('SELECT COUNT(*) FROM segments').fetchone()
 
 exit() #------------------------------------------------------------------------
 
