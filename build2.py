@@ -252,22 +252,22 @@ for (i, j) in combinations(indexes, 2):
         print >> stderr, '%.2f%% -' % (100. * comparison/comparisons),
         print >> stderr, 'feature #%d and #%d' % (i, j),
         
-        border = shape1.intersection(shape2)
+        border = linemerge(shape1.intersection(shape2))
         
         geoms = hasattr(border, 'geoms') and border.geoms or [border]
         
         print >> stderr, sum( [len(list(g.coords)) for g in geoms] ), 'coords',
         
-        try:
-            line_id = rtree.count(rtree.get_bounds())
-        except RTreeError:
-            line_id = 0
-
-        print >> stderr, '-', line_id,
-
         for geom in geoms:
+            try:
+                line_id = rtree.count(rtree.get_bounds())
+            except RTreeError:
+                line_id = 0
+    
+            print >> stderr, '-', 'line', line_id,
+    
             coords = list(geom.coords)
-            segments = [coords[i:i+2] for i in range(len(coords) - 1)]
+            segments = [coords[k:k+2] for k in range(len(coords) - 1)]
             
             for ((x1, y1), (x2, y2)) in segments:
                 db.execute("""INSERT INTO segments
@@ -275,8 +275,8 @@ for (i, j) in combinations(indexes, 2):
                               VALUES (?, ?, ?, ?, ?, ?, ?)""",
                            (i, j, line_id, x1, y1, x2, y2))
                 
-                xmin, ymin, xmax, ymax = min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
-                rtree.add(db.lastrowid, (xmin, ymin, xmax, ymax))
+                bbox = min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
+                rtree.add(db.lastrowid, bbox)
         
         graph[(i, j)] = True
         shared[i].append(border)
@@ -285,11 +285,6 @@ for (i, j) in combinations(indexes, 2):
         print >> stderr, '-', border.type
 
     comparison += 1
-
-for row in db.execute('SELECT * FROM segments LIMIT 20'):
-    print row
-
-exit() #------------------------------------------------------------------------
 
 print >> stderr, 'Making unshared borders...'
 
@@ -302,7 +297,45 @@ for i in indexes:
     for border in shared[i]:
         boundary = boundary.difference(border)
 
+    print >> stderr, i, boundary.type,
+
+    geoms = hasattr(boundary, 'geoms') and boundary.geoms or [boundary]
+    geoms = [geom for geom in geoms if hasattr(geom, 'coords')]
+    
+    for geom in geoms:
+        try:
+            line_id = rtree.count(rtree.get_bounds())
+        except RTreeError:
+            line_id = 0
+
+        print >> stderr, '-', 'line', line_id,
+
+        coords = list(geom.coords)
+        segments = [coords[k:k+2] for k in range(len(coords) - 1)]
+        
+        for ((x1, y1), (x2, y2)) in segments:
+            db.execute("""INSERT INTO segments
+                          (src1_id, line_id, x1, y1, x2, y2)
+                          VALUES (?, ?, ?, ?, ?, ?)""",
+                       (i, line_id, x1, y1, x2, y2))
+            
+            bbox = min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
+            rtree.add(db.lastrowid, bbox)
+
+    print >> stderr, '.'
+    
     unshared.append(boundary)
+
+for row in db.execute('SELECT * FROM segments LIMIT 20'):
+    print row
+    
+print len(indexes), 'shapes.'
+print rtree.count(rtree.get_bounds()), 'guids (rtree).'
+print db.execute('SELECT COUNT(DISTINCT guid) FROM segments').fetchone()[0], 'guids (db).'
+print db.execute('SELECT COUNT(DISTINCT line_id) FROM segments').fetchone()[0], 'lines? (db)'
+print db.execute('SELECT COUNT(DISTINCT src1_id), COUNT(DISTINCT src2_id) FROM segments').fetchone(), 'shapes? (db)'
+
+exit() #------------------------------------------------------------------------
 
 print >> stderr, 'Checking lengths...'
 
