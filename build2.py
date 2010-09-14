@@ -110,21 +110,17 @@ def populate_shared_segments(datasource):
         
         if shape1.intersects(shape2):
             print >> stderr, '%.2f%% -' % (100. * comparison/comparisons),
-            print >> stderr, 'feature #%d and #%d' % (i, j),
+            print >> stderr, 'features %d and %d:' % (i, j),
             
             border = linemerge(shape1.intersection(shape2))
             
             geoms = hasattr(border, 'geoms') and border.geoms or [border]
-            
-            print >> stderr, sum( [len(list(g.coords)) for g in geoms] ), 'coords',
             
             for geom in geoms:
                 try:
                     line_id = datasource.rtree.count(datasource.rtree.get_bounds())
                 except RTreeError:
                     line_id = 0
-        
-                print >> stderr, '-', 'line', line_id,
         
                 coords = list(geom.coords)
                 segments = [coords[k:k+2] for k in range(len(coords) - 1)]
@@ -137,11 +133,13 @@ def populate_shared_segments(datasource):
                     
                     bbox = min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
                     datasource.rtree.add(datasource.db.lastrowid, bbox)
+
+                print >> stderr, len(coords), '-',
             
             shared[i].append(border)
             shared[j].append(border)
             
-            print >> stderr, '-', border.type
+            print >> stderr, border.type
     
         comparison += 1
 
@@ -157,7 +155,7 @@ def populate_unshared_segments(datasource, shared):
         for border in shared[i]:
             boundary = boundary.difference(border)
         
-        print >> stderr, i, boundary.type,
+        print >> stderr, 'Feature %d:' % i,
     
         geoms = hasattr(boundary, 'geoms') and boundary.geoms or [boundary]
         geoms = [geom for geom in geoms if hasattr(geom, 'coords')]
@@ -167,8 +165,6 @@ def populate_unshared_segments(datasource, shared):
                 line_id = datasource.rtree.count(datasource.rtree.get_bounds())
             except RTreeError:
                 line_id = 0
-    
-            print >> stderr, '-', 'line', line_id,
     
             coords = list(geom.coords)
             segments = [coords[k:k+2] for k in range(len(coords) - 1)]
@@ -182,100 +178,12 @@ def populate_unshared_segments(datasource, shared):
                 bbox = min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
                 datasource.rtree.add(datasource.db.lastrowid, bbox)
     
-        print >> stderr, '.'
+            print >> stderr, len(coords), '-',
+    
+        print >> stderr, boundary.type
 
-def simplify(original_shape, tolerance, cross_check):
-    """
-    """
-    if original_shape.type != 'LineString':
-        return original_shape
-    
-    coords = list(original_shape.coords)
-    new_coords = coords[:]
-    
-    if len(coords) <= 2:
-        # don't shorten the too-short
-        return original_shape
-    
-    # For each coordinate that forms the apex of a three-coordinate
-    # triangle, find the area of that triangle and put it into a list
-    # along with the coordinate index and the resulting line if the
-    # triangle were flattened, ordered from smallest to largest.
-
-    triples = [(i + 1, coords[i], coords[i + 1], coords[i + 2]) for i in range(len(coords) - 2)]
-    triangles = [(i, Polygon([c1, c2, c3, c1]), c1, c3) for (i, c1, c2, c3) in triples]
-    areas = sorted( [(triangle.area, i, c1, c3) for (i, triangle, c1, c3) in triangles] )
-
-    min_area = tolerance ** 2
-    
-    if areas[0][0] > min_area:
-        # there's nothing to be done
-        return original_shape
-    
-    if cross_check:
-        rtree = Rtree()
-    
-        # We check for intersections by building up an R-Tree index of each
-        # and every line segment that makes up the original shape, and then
-        # quickly doing collision checks against these.
-    
-        for j in range(len(coords) - 1):
-            (x1, y1), (x2, y2) = coords[j], coords[j + 1]
-            rtree.add(j, (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)))
-    
-    preserved, popped = set(), False
-    
-    # Remove any coordinate that makes a triangle whose area is
-    # below the minimum threshold, starting with the smallest and
-    # working up. Mark points to be preserved until the recursive
-    # call to simplify().
-    
-    for (area, index, ca, cb) in areas:
-        if area > min_area:
-            # there won't be any more points to remove.
-            break
-    
-        if index in preserved:
-            # the current point is too close to a previously-preserved one.
-            continue
-        
-        preserved.add(index + 1)
-        preserved.add(index - 1)
-
-        if cross_check:
-        
-            # This is potentially a very expensive check, so we use the R-Tree
-            # index we made earlier to rapidly cut down on the number of lines
-            # from the original shape to check for collisions.
-        
-            (x1, y1), (x2, y2) = ca, cb
-            new_line = LineString([ca, cb])
-
-            box_ids = rtree.intersection((min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)))
-            old_lines = [LineString(coords[j:j+2]) for j in box_ids]
-            
-            # Will removing this point result in an invalid geometry?
-
-            if True in [old_line.crosses(new_line) for old_line in old_lines]:
-                # Yes, because the index told us so.
-                continue
-
-            if new_line.crosses(original_shape):
-                # Yes, because we painstakingly checked against the original shape.
-                continue
-        
-        # It's safe to remove this point
-        new_coords[index], popped = None, True
-    
-    new_coords = [coord for coord in new_coords if coord is not None]
-    
-    if cross_check:
-        print 'simplify', len(coords), 'to', len(new_coords)
-    
-    if not popped:
-        return original_shape
-    
-    return simplify(LineString(new_coords), tolerance, cross_check)
+def bbox(x1, y1, x2, y2):
+    return min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
 
 print >> stderr, 'Loading data...'
 datasource = load_datasource(argv[1])
@@ -286,11 +194,9 @@ shared_borders = populate_shared_segments(datasource)
 print >> stderr, 'Making unshared borders...'
 populate_unshared_segments(datasource, shared_borders)
 
-print len(datasource.indexes()), 'shapes.'
-print datasource.rtree.count(datasource.rtree.get_bounds()), 'guids (rtree).'
-print datasource.db.execute('SELECT COUNT(DISTINCT guid) FROM segments').fetchone()[0], 'guids (db).'
-print datasource.db.execute('SELECT COUNT(DISTINCT line_id) FROM segments').fetchone()[0], 'lines? (db)'
-print datasource.db.execute('SELECT COUNT(DISTINCT src1_id), COUNT(DISTINCT src2_id) FROM segments').fetchone(), 'shapes? (db)'
+print >> stderr, len(datasource.indexes()), 'shapes,',
+print >> stderr, datasource.db.execute('SELECT COUNT(DISTINCT line_id) FROM segments').fetchone()[0], 'lines,',
+print >> stderr, datasource.db.execute('SELECT COUNT(DISTINCT guid) FROM segments').fetchone()[0], 'segments.'
 
 tolerance = 500
 
@@ -304,6 +210,11 @@ while True:
     
     for line_id in line_ids:
         
+        # For each coordinate that forms the apex of a two-segment
+        # triangle, find the area of that triangle and put it into a list
+        # along with the segment identifier and the resulting line if the
+        # triangle were flattened, ordered from smallest to largest.
+    
         rows = datasource.db.execute("""SELECT guid, x1, y1, x2, y2
                                         FROM segments
                                         WHERE line_id = ?
@@ -311,28 +222,33 @@ while True:
                                         ORDER BY guid""",
                                      (line_id, ))
         
-        pairs = [(guid, (x1, y1), (x2, y2)) for (guid, x1, y1, x2, y2) in rows]
-        triples = [(pairs[i][0], pairs[i+1][0], pairs[i][1], pairs[i][2], pairs[i+1][2]) for i in range(len(pairs) - 1)]
+        segs = [(guid, (x1, y1), (x2, y2)) for (guid, x1, y1, x2, y2) in rows]
+        triples = [(segs[i][0], segs[i+1][0], segs[i][1], segs[i][2], segs[i+1][2]) for i in range(len(segs) - 1)]
         triangles = [(guid1, guid2, Polygon([c1, c2, c3, c1]), c1, c3) for (guid1, guid2, c1, c2, c3) in triples]
         areas = sorted( [(triangle.area, guid1, guid2, c1, c3) for (guid1, guid2, triangle, c1, c3) in triangles] )
         
         min_area = tolerance ** 2
         
         if not areas or areas[0][0] > min_area:
+            # there's nothing to be done
             continue
+        
+        # Reduce any segments that makes a triangle whose area is below
+        # the minimum threshold, starting with the smallest and working up.
+        # Mark segments to be preserved until the next iteration.
         
         for (area, guid1, guid2, ca, cb) in areas:
             if area > min_area:
+                # there won't be any more points to remove.
                 break
             
             if guid1 in preserved or guid2 in preserved:
+                # the current segment is too close to a previously-preserved one.
                 continue
     
-            preserved.add(guid1)
-            preserved.add(guid2)
-            
-            def bbox(x1, y1, x2, y2):
-                return min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
+            # Check the resulting flattened line against the rest
+            # any of the original shapefile, to determine if it would
+            # cross any existing line segment.
             
             (x1, y1), (x2, y2) = ca, cb
             new_line = LineString([ca, cb])
@@ -344,6 +260,9 @@ while True:
             if True in [new_line.crosses(old_line) for old_line in old_lines]:
                 stderr.write('x%d' % line_id)
                 continue
+            
+            preserved.add(guid1)
+            preserved.add(guid2)
             
             popped = True
             
@@ -408,8 +327,6 @@ for i in datasource.indexes():
             continue
 
         raise Exception('yow')
-    
-    print i, poly.length, 'vs.', sum([line.length for line in lines])
     
     feat = ogr.Feature(out_layer.GetLayerDefn())
     
