@@ -184,60 +184,6 @@ def populate_unshared_segments(datasource, shared):
     
         print >> stderr, '.'
 
-def linemunge(lines, depth=0):
-    """ Similar to linemerge(), but happy to return invalid linestrings.
-    """
-    joined = False
-    indexes = range(len(lines))
-    removed = set()
-    
-    print depth, sum([line.length for line in lines]),
-    
-    for (i, j) in combinations(indexes, 2):
-        if i in removed or j in removed:
-            continue
-    
-        if lines[i].intersects(lines[j]):
-            if lines[i].intersection(lines[j]).type in ('Point', 'MultiPoint'):
-                print (i, j), 
-            
-                coordsA = list(lines[i].coords)
-                coordsB = list(lines[j].coords)
-                
-                if coordsA[-1] == coordsB[0]:
-                    lines[i] = LineString(coordsA[:-1] + coordsB)
-
-                elif coordsA[-1] == coordsB[-1]:
-                    coordsB.reverse()
-                    lines[i] = LineString(coordsA[:-1] + coordsB)
-
-                elif coordsB[-1] == coordsA[0]:
-                    lines[i] = LineString(coordsB[:-1] + coordsA)
-
-                elif coordsB[-1] == coordsA[-1]:
-                    coordsA.reverse()
-                    lines[i] = LineString(coordsB[:-1] + coordsA)
-
-                else:
-                    print 'wait',
-                    continue
-                
-                lines[j] = None
-                removed.add(j)
-                joined = True
-    
-    lines = [line for line in lines if line is not None]
-    
-    print 'to', sum([line.length for line in lines]), 'in', len(lines), 'lines'
-
-    if joined:
-        lines = linemunge(lines, depth + 1)
-    else:
-        print [(map(int, coords[0]), map(int, coords[-1])) for coords in [list(line.coords) for line in lines]]
-        print depth, 'done.'
-    
-    return lines
-
 def simplify(original_shape, tolerance, cross_check):
     """
     """
@@ -346,7 +292,7 @@ print datasource.db.execute('SELECT COUNT(DISTINCT guid) FROM segments').fetchon
 print datasource.db.execute('SELECT COUNT(DISTINCT line_id) FROM segments').fetchone()[0], 'lines? (db)'
 print datasource.db.execute('SELECT COUNT(DISTINCT src1_id), COUNT(DISTINCT src2_id) FROM segments').fetchone(), 'shapes? (db)'
 
-tolerance = 5000
+tolerance = 500
 
 line_ids = [line_id for (line_id, ) in datasource.db.execute('SELECT DISTINCT line_id FROM segments')]
 
@@ -401,18 +347,11 @@ while True:
             
             popped = True
             
-            def rem_guid(datasource, guid):
-                """
-                """
+            for guid in (guid1, guid2):
                 q = 'SELECT x1, y1, x2, y2 FROM segments WHERE guid = %d' % guid
-                (x1, y1, x2, y2) = datasource.db.execute(q).fetchone()
-                bbox = min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
+                x1, y1, x2, y2 = datasource.db.execute(q).fetchone()
+                datasource.rtree.delete(guid, bbox(x1, y1, x2, y2))
     
-                datasource.rtree.delete(guid, bbox)
-    
-            rem_guid(datasource, guid1)
-            rem_guid(datasource, guid2)
-            
             x1, y1, x2, y2 = ca[0], ca[1], cb[0], cb[1]
     
             datasource.db.execute('UPDATE segments SET removed=1 WHERE guid=%d' % guid2)
@@ -423,9 +362,7 @@ while True:
         
         stderr.write('.')
     
-    stderr.write('\n')
-
-    print >> stderr, was, '-->',
+    print >> stderr, ' reduced from', was, 'to',
     print >> stderr, datasource.db.execute('SELECT COUNT(*) FROM segments WHERE removed=0').fetchone()[0]
         
     if not popped:
@@ -473,173 +410,6 @@ for i in datasource.indexes():
         raise Exception('yow')
     
     print i, poly.length, 'vs.', sum([line.length for line in lines])
-    
-    feat = ogr.Feature(out_layer.GetLayerDefn())
-    
-    for (j, field) in enumerate(datasource.fields):
-        feat.SetField(field.name, datasource.values[i][j])
-    
-    geom = ogr.CreateGeometryFromWkb(dumps(poly))
-    
-    feat.SetGeometry(geom)
-
-    out_layer.CreateFeature(feat)
-
-exit() #------------------------------------------------------------------------
-
-print >> stderr, 'Checking lengths...'
-
-for i in indexes:
-
-    shared_lengths = [border.length for border in shared[i]]
-    
-    tolerance, error = 0.000001, abs(datasource.shapes[i].length - unshared[i].length - sum(shared_lengths))
-    assert error < tolerance, 'Feature #%(i)d error too large: %(error).8f > %(tolerance).8f' % locals()
-
-exit()
-
-print >> stderr, 'Building output...'
-
-err_driver = ogr.GetDriverByName('ESRI Shapefile')
-err_source = err_driver.CreateDataSource('err.shp')
-assert err_source is not None, 'Failed creation of err.shp'
-err_layer = err_source.CreateLayer('default', datasource.srs, ogr.wkbMultiLineString)
-
-out_driver = ogr.GetDriverByName('ESRI Shapefile')
-out_source = out_driver.CreateDataSource('out.shp')
-assert out_source is not None, 'Failed creation of out.shp'
-out_layer = out_source.CreateLayer('default', datasource.srs, ogr.wkbMultiPolygon)
-
-for field in datasource.fields:
-    for a_layer in (out_layer, err_layer):
-        field_defn = ogr.FieldDefn(field.name, field.type)
-        field_defn.SetWidth(field.width)
-        a_layer.CreateField(field_defn)
-
-tolerance = 650
-
-for i in indexes:
-
-    # Build up a list of linestrings that we will attempt to polygonize.
-
-    parts = shared[i] + [unshared[i]]
-    lines = []
-    
-    for part in parts:
-        for geom in getattr(part, 'geoms', None) or [part]:
-            if geom.type == 'LineString':
-                lines.append(geom)
-
-    try:
-        # Try simplify without cross-checks because it's cheap and fast.
-        simple_lines = [simplify(line, tolerance, False) for line in lines]
-        line_lengths = int(sum([l.length for l in simple_lines]))
-
-        poly = polygonize(simple_lines).next()
-        
-        if poly.length < line_lengths:
-            raise StopIteration
-
-    except StopIteration:
-        # A polygon wasn't found, for one of two reasons we're interested in:
-        # the shape would be too small to show up with the given tolerance, or
-        # the simplification resulted in an invalid, self-intersecting shape.
-        
-        lost_area = datasource.shapes[i].area
-        lost_portion = lost_area / (tolerance ** 2)
-        
-        if lost_portion < 4:
-            # It's just small.
-            print >> stderr, 'Skipped small feature #%(i)d' % locals()
-            continue
-
-        # A large lost_portion is a warning sign that we have an invalid polygon.
-        
-        try:
-            def assemble(polygons, depth=0):
-                """
-                """
-                popped = True
-                
-                while popped:
-                
-                    popped = False
-                    removed = set()
-                    indexes = range(len(polygons))
-                    
-                    for (i, j) in permutations(indexes, 2):
-                        if i in removed or j in removed:
-                            continue
-                        
-                        if polygons[i].contains(polygons[j]):
-                            try:
-                                poly1, poly2 = polygons[i], polygons[j]
-
-                                exterior = list(poly1.exterior.coords)
-                                interiors = [list(r.coords) for r in poly1.interiors]
-                                interiors += [list(poly2.exterior.coords)]
-
-                                polygons[i] = Polygon(exterior, interiors)
-                            except Exception, e:
-                                print i, '=', i, '-', j, '= Error', e
-                                pass
-                            else:
-                                print i, '=', i, '-', j
-                                popped = True
-                            removed.add(j)
-                            polygons[j] = None
-                
-                    polygons = [poly for poly in polygons if poly is not None]
-                
-                return polygons
-        
-            def polygulate(lines):
-                """
-                """
-                munged_lines = linemunge(lines[:])
-                
-                print len(munged_lines), 'lines?'
-                line_coords = [list(line.coords) for line in munged_lines]
-                poly_coords = [c for c in line_coords if c[0] == c[-1] and len(c) >= 3]
-                print len(poly_coords), 'polygons?'
-                polygons = [Polygon(coords) for coords in poly_coords]
-                
-                print len(polygons), 'polygons'
-                yield assemble(polygons)[0]
-            
-                raise StopIteration
-        
-            # Try simplify again with cross-checks because it's slow but careful.
-            simple_lines = [simplify(line, tolerance, False) for line in lines]
-            try:
-                poly = polygulate(simple_lines).next()
-            except Exception, e:
-                print e
-                raise StopIteration
-
-        except StopIteration:
-            # Again no polygon was found, which now probably means we have
-            # an actual error that should be saved to the error output file.
-    
-            #raise Warning('Lost feature #%(i)d, %(lost_portion)d times larger than maximum tolerance' % locals())
-            print >> stderr, 'Lost feature #%(i)d, %(lost_portion)d times larger than maximum tolerance' % locals()
-    
-            feat = ogr.Feature(err_layer.GetLayerDefn())
-            
-            for (j, field) in enumerate(datasource.fields):
-                feat.SetField(field.name, datasource.values[i][j])
-            
-            multiline = MultiLineString([list(line.coords) for line in simple_lines])
-            
-            geom = ogr.CreateGeometryFromWkb(dumps(multiline))
-            
-            feat.SetGeometry(geom)
-        
-            err_layer.CreateFeature(feat)
-            
-            continue
-        
-    #
     
     feat = ogr.Feature(out_layer.GetLayerDefn())
     
