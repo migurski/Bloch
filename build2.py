@@ -48,7 +48,10 @@ class Datasource:
                         x1      REAL,
                         y1      REAL,
                         x2      REAL,
-                        y2      REAL
+                        y2      REAL,
+                        
+                        -- flag
+                        removed INTEGER
         
                       )""")
         
@@ -128,8 +131,8 @@ def populate_shared_segments(datasource):
                 
                 for ((x1, y1), (x2, y2)) in segments:
                     datasource.db.execute("""INSERT INTO segments
-                                             (src1_id, src2_id, line_id, x1, y1, x2, y2)
-                                             VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                                             (src1_id, src2_id, line_id, x1, y1, x2, y2, removed)
+                                             VALUES (?, ?, ?, ?, ?, ?, ?, 0)""",
                                           (i, j, line_id, x1, y1, x2, y2))
                     
                     bbox = min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
@@ -172,8 +175,8 @@ def populate_unshared_segments(datasource, shared):
             
             for ((x1, y1), (x2, y2)) in segments:
                 datasource.db.execute("""INSERT INTO segments
-                                         (src1_id, line_id, x1, y1, x2, y2)
-                                         VALUES (?, ?, ?, ?, ?, ?)""",
+                                         (src1_id, line_id, x1, y1, x2, y2, removed)
+                                         VALUES (?, ?, ?, ?, ?, ?, 0)""",
                                       (i, line_id, x1, y1, x2, y2))
                 
                 bbox = min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
@@ -354,6 +357,7 @@ for line_id in line_ids:
     rows = datasource.db.execute("""SELECT guid, x1, y1, x2, y2
                                     FROM segments
                                     WHERE line_id = ?
+                                      AND removed = 0
                                     ORDER BY guid""",
                                  (line_id, ))
     
@@ -405,15 +409,56 @@ for line_id in line_ids:
         
         x1, y1, x2, y2 = ca[0], ca[1], cb[0], cb[1]
 
-        datasource.db.execute('DELETE FROM segments WHERE guid = %d' % guid2)
+        datasource.db.execute('UPDATE segments SET removed=1 WHERE guid=%d' % guid2)
         datasource.db.execute('UPDATE segments SET x1=?, y1=?, x2=?, y2=? WHERE guid=?',
                               (x1, y1, x2, y2, guid1))
 
         datasource.rtree.add(guid1, bbox(x1, y1, x2, y2))
+    
+    print 'was', line_id
         
-        print 'pop', guid2
-        
-print was, '-->', datasource.db.execute('SELECT COUNT(*) FROM segments').fetchone()
+print was, '-->', datasource.db.execute('SELECT COUNT(*) FROM segments WHERE removed=0').fetchone()
+
+print >> stderr, 'Building output...'
+
+err_driver = ogr.GetDriverByName('ESRI Shapefile')
+err_source = err_driver.CreateDataSource('err.shp')
+assert err_source is not None, 'Failed creation of err.shp'
+err_layer = err_source.CreateLayer('default', datasource.srs, ogr.wkbMultiLineString)
+
+out_driver = ogr.GetDriverByName('ESRI Shapefile')
+out_source = out_driver.CreateDataSource('out.shp')
+assert out_source is not None, 'Failed creation of out.shp'
+out_layer = out_source.CreateLayer('default', datasource.srs, ogr.wkbMultiPolygon)
+
+for field in datasource.fields:
+    for a_layer in (out_layer, err_layer):
+        field_defn = ogr.FieldDefn(field.name, field.type)
+        field_defn.SetWidth(field.width)
+        a_layer.CreateField(field_defn)
+
+for i in datasource.indexes():
+
+    segments = datasource.db.execute("""SELECT x1, y1, x2, y2
+                                        FROM segments
+                                        WHERE (src1_id = ? OR src2_id = ?)
+                                          AND removed = 0""", (i, i))
+
+    lines = [LineString([(x1, y1), (x2, y2)]) for (x1, y1, x2, y2) in segments]
+    poly = polygonize(lines).next()
+    
+    print i, poly.length, 'vs.', sum([line.length for line in lines])
+    
+    feat = ogr.Feature(out_layer.GetLayerDefn())
+    
+    for (j, field) in enumerate(datasource.fields):
+        feat.SetField(field.name, datasource.values[i][j])
+    
+    geom = ogr.CreateGeometryFromWkb(dumps(poly))
+    
+    feat.SetGeometry(geom)
+
+    out_layer.CreateFeature(feat)
 
 exit() #------------------------------------------------------------------------
 
