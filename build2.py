@@ -248,11 +248,28 @@ def populate_unshared_segments(datasource, shared):
 def bbox(x1, y1, x2, y2):
     return min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
 
+def make_memo_line():
+    """ Return a function that memorizes line strings to save on construction costs.
+    """
+    line_memory = {}
+    
+    def memo_line(x1, y1, x2, y2):
+        key = (x1, y1, x2, y2)
+
+        if key not in line_memory:
+            line_memory[key] = LineString([(x1, y1), (x2, y2)])
+
+        return line_memory[key]
+
+    return memo_line
+
+memo_line = make_memo_line()
+
 print >> stderr, 'Loading data...'
 datasource = load_datasource(argv[1])
 
 print >> stderr, 'Making shared borders...'
-shared_borders = populate_shared_segments_new(datasource)
+shared_borders = populate_shared_segments_old(datasource)
 
 print >> stderr, 'Making unshared borders...'
 populate_unshared_segments(datasource, shared_borders)
@@ -315,11 +332,11 @@ while True:
             # cross any existing line segment.
             
             (x1, y1), (x2, y2) = ca, cb
-            new_line = LineString([ca, cb])
+            new_line = memo_line(x1, y1, x2, y2)
     
             old_guids = datasource.rtree.intersection(bbox(x1, y1, x2, y2))
-            old_rows = datasource.db.execute('SELECT x1, y1, x2, y2 FROM segments WHERE guid IN (%s)' % ','.join(map(str, old_guids)))
-            old_lines = [LineString([(x1, y1), (x2, y2)]) for (x1, y1, x2, y2) in old_rows]
+            old_rows = datasource.db.execute('SELECT x1, y1, x2, y2 FROM segments WHERE guid IN (%s) AND removed=0' % ','.join(map(str, old_guids)))
+            old_lines = [memo_line(x1, y1, x2, y2) for (x1, y1, x2, y2) in old_rows]
             
             if True in [new_line.crosses(old_line) for old_line in old_lines]:
                 stderr.write('x%d' % line_id)
@@ -330,11 +347,6 @@ while True:
             
             popped = True
             
-            for guid in (guid1, guid2):
-                q = 'SELECT x1, y1, x2, y2 FROM segments WHERE guid = %d' % guid
-                x1, y1, x2, y2 = datasource.db.execute(q).fetchone()
-                datasource.rtree.delete(guid, bbox(x1, y1, x2, y2))
-    
             x1, y1, x2, y2 = ca[0], ca[1], cb[0], cb[1]
     
             datasource.db.execute('UPDATE segments SET removed=1 WHERE guid=%d' % guid2)
@@ -345,8 +357,16 @@ while True:
         
         stderr.write('.')
     
-    print >> stderr, ' reduced from', was, 'to',
-    print >> stderr, datasource.db.execute('SELECT COUNT(*) FROM segments WHERE removed=0').fetchone()[0]
+    datasource.rtree = Rtree()
+    now = 0
+    
+    print >> stderr, 'R',
+        
+    for (guid, x1, y1, x2, y2) in datasource.db.execute('SELECT guid, x1, y1, x2, y2 FROM segments WHERE removed=0'):
+        datasource.rtree.add(guid1, bbox(x1, y1, x2, y2))
+        now += 1
+    
+    print >> stderr, ' reduced from', was, 'to', now
         
     if not popped:
         break
@@ -376,7 +396,7 @@ for i in datasource.indexes():
                                         WHERE (src1_id = ? OR src2_id = ?)
                                           AND removed = 0""", (i, i))
 
-    lines = [LineString([(x1, y1), (x2, y2)]) for (x1, y1, x2, y2) in segments]
+    lines = [memo_line(x1, y1, x2, y2) for (x1, y1, x2, y2) in segments]
     
     try:
         poly = polygonize(lines).next()
