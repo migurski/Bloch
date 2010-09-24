@@ -3,7 +3,7 @@ from osgeo import ogr
 from rtree import Rtree
 from rtree.core import RTreeError
 from shapely.geos import lgeos
-from shapely.geometry import MultiLineString, LineString, Polygon
+from shapely.geometry import MultiLineString, LineString, Polygon, Point
 from shapely.geometry.base import geom_factory
 from shapely.wkb import loads, dumps
 from shapely.ops import polygonize
@@ -56,8 +56,8 @@ class Datasource:
                       )""")
         
         db.execute('CREATE INDEX segments_lines ON segments (line_id, guid)')
-        db.execute('CREATE INDEX shape1_lines ON segments (src1_id, line_id, guid)')
-        db.execute('CREATE INDEX shape2_lines ON segments (src2_id, line_id, guid)')
+        db.execute('CREATE INDEX shape1_parts ON segments (src1_id)')
+        db.execute('CREATE INDEX shape2_parts ON segments (src2_id)')
         
         self.db = db
         self.rtree = Rtree()
@@ -97,7 +97,7 @@ def linemerge(shape):
     result = lgeos.GEOSLineMerge(shape._geom)
     return geom_factory(result)
 
-def populate_shared_segments(datasource):
+def populate_shared_segments_old(datasource):
     """
     """
     shared = [[] for i in datasource.indexes()]
@@ -145,6 +145,69 @@ def populate_shared_segments(datasource):
 
     return shared
 
+def populate_shared_segments_new(datasource):
+    """
+    """
+    rtree = Rtree()
+    indexes = datasource.indexes()
+    
+    for i in indexes:
+        xmin, ymin, xmax, ymax = datasource.shapes[i].bounds
+        
+        xbuf = (xmax - xmin) * .001
+        ybuf = (ymax - ymin) * .001
+        
+        bounds = (xmin-xbuf, ymin-ybuf, xmax+xbuf, ymax+ybuf)
+        
+        rtree.add(i, bounds)
+    
+    shared = [[] for i in indexes]
+    
+    for i in indexes:
+        for j in rtree.intersection(datasource.shapes[i].bounds):
+            
+            if i >= j:
+                continue
+            
+            shape1 = datasource.shapes[i]
+            shape2 = datasource.shapes[j]
+            
+            if not shape1.intersects(shape2):
+                continue
+            
+            print >> stderr, 'Features %d and %d:' % (i, j), 'of', len(indexes),
+            
+            border = linemerge(shape1.intersection(shape2))
+            
+            geoms = hasattr(border, 'geoms') and border.geoms or [border]
+            
+            for geom in geoms:
+                try:
+                    line_id = datasource.rtree.count(datasource.rtree.get_bounds())
+                except RTreeError:
+                    line_id = 0
+        
+                coords = list(geom.coords)
+                segments = [coords[k:k+2] for k in range(len(coords) - 1)]
+                
+                for ((x1, y1), (x2, y2)) in segments:
+                    datasource.db.execute("""INSERT INTO segments
+                                             (src1_id, src2_id, line_id, x1, y1, x2, y2, removed)
+                                             VALUES (?, ?, ?, ?, ?, ?, ?, 0)""",
+                                          (i, j, line_id, x1, y1, x2, y2))
+                    
+                    bbox = min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
+                    datasource.rtree.add(datasource.db.lastrowid, bbox)
+
+                print >> stderr, len(coords), '-',
+            
+            shared[i].append(border)
+            shared[j].append(border)
+            
+            print >> stderr, border.type
+
+    return shared
+
 def populate_unshared_segments(datasource, shared):
     """
     """
@@ -189,7 +252,7 @@ print >> stderr, 'Loading data...'
 datasource = load_datasource(argv[1])
 
 print >> stderr, 'Making shared borders...'
-shared_borders = populate_shared_segments(datasource)
+shared_borders = populate_shared_segments_new(datasource)
 
 print >> stderr, 'Making unshared borders...'
 populate_unshared_segments(datasource, shared_borders)
@@ -198,9 +261,10 @@ print >> stderr, len(datasource.indexes()), 'shapes,',
 print >> stderr, datasource.db.execute('SELECT COUNT(DISTINCT line_id) FROM segments').fetchone()[0], 'lines,',
 print >> stderr, datasource.db.execute('SELECT COUNT(DISTINCT guid) FROM segments').fetchone()[0], 'segments.'
 
-tolerance = 500
+tolerance = 5000
 
-line_ids = [line_id for (line_id, ) in datasource.db.execute('SELECT DISTINCT line_id FROM segments')]
+q = 'SELECT line_id, COUNT(guid) AS guids FROM segments GROUP BY line_id order by guids DESC'
+line_ids = [line_id for (line_id, count) in datasource.db.execute(q)]
 
 while True:
 
