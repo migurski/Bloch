@@ -1,5 +1,9 @@
 from sys import argv, stderr, exit
 from os.path import splitext
+from optparse import OptionParser
+from itertools import combinations, permutations
+from sqlite3 import connect
+
 from osgeo import ogr
 from rtree import Rtree
 from rtree.core import RTreeError
@@ -8,8 +12,6 @@ from shapely.geometry import MultiLineString, LineString, Polygon, Point
 from shapely.geometry.base import geom_factory
 from shapely.wkb import loads, dumps
 from shapely.ops import polygonize
-from itertools import combinations, permutations
-from sqlite3 import connect
 
 drivers = {'.shp': 'ESRI Shapefile', '.json': 'GeoJSON'}
 
@@ -69,7 +71,21 @@ class Datasource:
     def indexes(self):
         return range(len(self.values))
 
-def load_datasource(filename):
+def load(filename):
+    """
+    """
+    print >> stderr, 'Making data source...'
+    datasource = make_datasource(filename)
+    
+    print >> stderr, 'Making shared borders...'
+    shared_borders = populate_shared_segments_by_combination(datasource)
+    
+    print >> stderr, 'Making unshared borders...'
+    populate_unshared_segments(datasource, shared_borders)
+    
+    return datasource
+
+def make_datasource(filename):
     """
     """
     source = ogr.Open(filename)
@@ -252,7 +268,7 @@ def populate_unshared_segments(datasource, shared):
 def simplify_linework(datasource, tolerance):
     """ Do the thing.
     """
-    q = 'SELECT line_id, COUNT(guid) AS guids FROM segments GROUP BY line_id order by guids DESC'
+    q = 'SELECT line_id, COUNT(guid) AS guids FROM segments WHERE removed=0 GROUP BY line_id order by guids DESC'
     line_ids = [line_id for (line_id, count) in datasource.db.execute(q)]
     
     stable_lines = set()
@@ -339,13 +355,10 @@ def simplify_linework(datasource, tolerance):
         print >> stderr, ' reduced from', was, 'to',
         print >> stderr, datasource.db.execute('SELECT COUNT(guid) FROM segments WHERE removed=0').fetchone()[0],
         
-        if popped:
-            datasource.rtree = Rtree()
-            
-            print >> stderr, 'R',
-                
-            for (guid, x1, y1, x2, y2) in datasource.db.execute('SELECT guid, x1, y1, x2, y2 FROM segments WHERE removed=0'):
-                datasource.rtree.add(guid1, bbox(x1, y1, x2, y2))
+        datasource.rtree = Rtree()
+        
+        for (guid, x1, y1, x2, y2) in datasource.db.execute('SELECT guid, x1, y1, x2, y2 FROM segments WHERE removed=0'):
+            datasource.rtree.add(guid1, bbox(x1, y1, x2, y2))
             
         print >> stderr, '.'
 
@@ -388,7 +401,8 @@ def save_datasource(datasource, filename):
                 print >> stderr, 'Skipped small feature #%(i)d' % locals()
                 continue
     
-            raise Exception('yow')
+            # This is a bug we don't understand yet.
+            raise Exception('Failed to get a meaningful polygon out of large feature #%(i)d' % locals())
         
         feat = ogr.Feature(out_layer.GetLayerDefn())
         
@@ -419,23 +433,27 @@ def make_memo_line():
 
     return memo_line
 
-print >> stderr, 'Loading data...'
-datasource = load_datasource(argv[1])
+parser = OptionParser(usage="""%prog <input file> <tolerance> <output file> [<tolerance> <output file>]+
 
-print >> stderr, 'Making shared borders...'
-shared_borders = populate_shared_segments_by_combination(datasource)
+..""")
 
-print >> stderr, 'Making unshared borders...'
-populate_unshared_segments(datasource, shared_borders)
-
-print >> stderr, len(datasource.indexes()), 'shapes,',
-print >> stderr, datasource.db.execute('SELECT COUNT(DISTINCT line_id) FROM segments').fetchone()[0], 'lines,',
-print >> stderr, datasource.db.execute('SELECT COUNT(DISTINCT guid) FROM segments').fetchone()[0], 'segments.'
-
-print >> stderr, 'Simplifying linework...'
-tolerance = 5000
-simplify_linework(datasource, tolerance)
-
-print >> stderr, 'Building output...'
-filename = 'out.json'
-save_datasource(datasource, filename)
+if __name__ == '__main__':
+    opts, args = parser.parse_args()
+    
+    infile, outargs = args[0], args[1:]
+    outfiles = [(int(outargs[i]), outargs[i + 1]) for i in range(0, len(outargs), 2)]
+    
+    print >> stderr, 'Loading data...'
+    datasource = load(infile)
+    
+    print >> stderr, len(datasource.indexes()), 'shapes,',
+    print >> stderr, datasource.db.execute('SELECT COUNT(DISTINCT line_id) FROM segments').fetchone()[0], 'lines,',
+    print >> stderr, datasource.db.execute('SELECT COUNT(DISTINCT guid) FROM segments').fetchone()[0], 'segments.'
+    
+    for (tolerance, outfile) in sorted(outfiles):
+    
+        print >> stderr, 'Simplifying linework to %d...' % tolerance
+        simplify_linework(datasource, tolerance)
+        
+        print >> stderr, 'Building %s...' % outfile
+        save_datasource(datasource, outfile)
