@@ -98,7 +98,7 @@ def linemerge(shape):
     result = lgeos.GEOSLineMerge(shape._geom)
     return geom_factory(result)
 
-def populate_shared_segments_old(datasource):
+def populate_shared_segments_by_combination(datasource):
     """
     """
     shared = [[] for i in datasource.indexes()]
@@ -146,7 +146,7 @@ def populate_shared_segments_old(datasource):
 
     return shared
 
-def populate_shared_segments_new(datasource):
+def populate_shared_segments_by_rtree(datasource):
     """
     """
     rtree = Rtree()
@@ -348,7 +348,6 @@ def simplify_linework(datasource, tolerance):
 
         if not popped:
             break
-        
 
 def bbox(x1, y1, x2, y2):
     return min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
@@ -372,7 +371,7 @@ print >> stderr, 'Loading data...'
 datasource = load_datasource(argv[1])
 
 print >> stderr, 'Making shared borders...'
-shared_borders = populate_shared_segments_old(datasource)
+shared_borders = populate_shared_segments_by_combination(datasource)
 
 print >> stderr, 'Making unshared borders...'
 populate_unshared_segments(datasource, shared_borders)
