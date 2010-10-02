@@ -1,4 +1,5 @@
 from sys import argv, stderr, exit
+from os.path import splitext
 from osgeo import ogr
 from rtree import Rtree
 from rtree.core import RTreeError
@@ -9,6 +10,8 @@ from shapely.wkb import loads, dumps
 from shapely.ops import polygonize
 from itertools import combinations, permutations
 from sqlite3 import connect
+
+drivers = {'.shp': 'ESRI Shapefile', '.json': 'GeoJSON'}
 
 class Field:
     """
@@ -349,6 +352,55 @@ def simplify_linework(datasource, tolerance):
         if not popped:
             break
 
+def save_datasource(datasource, filename):
+    """
+    """
+    ext = splitext(filename)[1]
+    
+    out_driver = ogr.GetDriverByName(drivers.get(ext))
+    out_source = out_driver.CreateDataSource(filename)
+    assert out_source is not None, 'Failed creation of %s' % filename
+    out_layer = out_source.CreateLayer('default', datasource.srs, ogr.wkbMultiPolygon)
+    
+    for field in datasource.fields:
+        field_defn = ogr.FieldDefn(field.name, field.type)
+        field_defn.SetWidth(field.width)
+        out_layer.CreateField(field_defn)
+    
+    for i in datasource.indexes():
+    
+        segments = datasource.db.execute("""SELECT x1, y1, x2, y2
+                                            FROM segments
+                                            WHERE (src1_id = ? OR src2_id = ?)
+                                              AND removed = 0""", (i, i))
+    
+        lines = [datasource.memo_line(x1, y1, x2, y2) for (x1, y1, x2, y2) in segments]
+        
+        try:
+            poly = polygonize(lines).next()
+    
+        except StopIteration:
+            lost_area = datasource.shapes[i].area
+            lost_portion = lost_area / (tolerance ** 2)
+            
+            if lost_portion < 4:
+                # It's just small.
+                print >> stderr, 'Skipped small feature #%(i)d' % locals()
+                continue
+    
+            raise Exception('yow')
+        
+        feat = ogr.Feature(out_layer.GetLayerDefn())
+        
+        for (j, field) in enumerate(datasource.fields):
+            feat.SetField(field.name, datasource.values[i][j])
+        
+        geom = ogr.CreateGeometryFromWkb(dumps(poly))
+        
+        feat.SetGeometry(geom)
+    
+        out_layer.CreateFeature(feat)
+
 def bbox(x1, y1, x2, y2):
     return min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
 
@@ -385,53 +437,5 @@ tolerance = 5000
 simplify_linework(datasource, tolerance)
 
 print >> stderr, 'Building output...'
-
-err_driver = ogr.GetDriverByName('ESRI Shapefile')
-err_source = err_driver.CreateDataSource('err.shp')
-assert err_source is not None, 'Failed creation of err.shp'
-err_layer = err_source.CreateLayer('default', datasource.srs, ogr.wkbMultiLineString)
-
-out_driver = ogr.GetDriverByName('ESRI Shapefile')
-out_source = out_driver.CreateDataSource('out.shp')
-assert out_source is not None, 'Failed creation of out.shp'
-out_layer = out_source.CreateLayer('default', datasource.srs, ogr.wkbMultiPolygon)
-
-for field in datasource.fields:
-    for a_layer in (out_layer, err_layer):
-        field_defn = ogr.FieldDefn(field.name, field.type)
-        field_defn.SetWidth(field.width)
-        a_layer.CreateField(field_defn)
-
-for i in datasource.indexes():
-
-    segments = datasource.db.execute("""SELECT x1, y1, x2, y2
-                                        FROM segments
-                                        WHERE (src1_id = ? OR src2_id = ?)
-                                          AND removed = 0""", (i, i))
-
-    lines = [datasource.memo_line(x1, y1, x2, y2) for (x1, y1, x2, y2) in segments]
-    
-    try:
-        poly = polygonize(lines).next()
-
-    except StopIteration:
-        lost_area = datasource.shapes[i].area
-        lost_portion = lost_area / (tolerance ** 2)
-        
-        if lost_portion < 4:
-            # It's just small.
-            print >> stderr, 'Skipped small feature #%(i)d' % locals()
-            continue
-
-        raise Exception('yow')
-    
-    feat = ogr.Feature(out_layer.GetLayerDefn())
-    
-    for (j, field) in enumerate(datasource.fields):
-        feat.SetField(field.name, datasource.values[i][j])
-    
-    geom = ogr.CreateGeometryFromWkb(dumps(poly))
-    
-    feat.SetGeometry(geom)
-
-    out_layer.CreateFeature(feat)
+filename = 'out.json'
+save_datasource(datasource, filename)
