@@ -5,6 +5,9 @@ data sources and simplify the linework while preserving topology. The simplify()
 method accepts tolerances in map units, so simplification can be performed by
 known amounts with predictable outcomes.
 
+Dependencies include Warmerdam (http://trac.osgeo.org/gdal/wiki/GdalOgrInPython)
+and Gillies (http://trac.gispython.org/lab/wiki/Rtree, http://trac.gispython.org/lab/wiki/Shapely).
+
 Example usage:
 
   # Load a data file into a Datasource instance.
