@@ -106,7 +106,7 @@ class Datasource:
     def _indexes(self):
         return range(len(self.values))
     
-    def simplify(self, tolerance):
+    def simplify(self, tolerance, verbose=False):
         """ Simplify the polygonal linework.
         
             This method can be called multiple times, but the process is
@@ -156,7 +156,9 @@ class Datasource:
                 if not areas or areas[0][0] > min_area:
                     # there's nothing to be done
                     stable_lines.add(line_id)
-                    stderr.write('-')
+                    
+                    if verbose:
+                        stderr.write('-')
                     continue
                 
                 # Reduce any segments that makes a triangle whose area is below
@@ -184,7 +186,8 @@ class Datasource:
                     old_lines = [self.memo_line(x1, y1, x2, y2) for (x1, y1, x2, y2) in old_rows]
                     
                     if True in [new_line.crosses(old_line) for old_line in old_lines]:
-                        stderr.write('x%d' % line_id)
+                        if verbose:
+                            stderr.write('x%d' % line_id)
                         continue
                     
                     preserved.add(guid1)
@@ -200,32 +203,41 @@ class Datasource:
             
                     self.rtree.add(guid1, bbox(x1, y1, x2, y2))
                 
-                stderr.write('.')
+                if verbose:
+                    stderr.write('.')
             
-            print >> stderr, ' reduced from', was, 'to',
-            print >> stderr, self.db.execute('SELECT COUNT(guid) FROM segments WHERE removed=0').fetchone()[0],
+            if verbose:
+                print >> stderr, ' reduced from', was, 'to',
+                print >> stderr, self.db.execute('SELECT COUNT(guid) FROM segments WHERE removed=0').fetchone()[0],
             
             self.rtree = Rtree()
             
             for (guid, x1, y1, x2, y2) in self.db.execute('SELECT guid, x1, y1, x2, y2 FROM segments WHERE removed=0'):
                 self.rtree.add(guid1, bbox(x1, y1, x2, y2))
                 
-            print >> stderr, '.'
+            if verbose:
+                print >> stderr, '.'
     
             if not popped:
                 break
 
-def load(filename):
+def load(filename, verbose=False):
     """ Load an OGR data source, return a new Datasource instance.
     """
-    print >> stderr, 'Making data source...'
+    if verbose:
+        print >> stderr, 'Making data source...'
+
     datasource = make_datasource(filename)
     
-    print >> stderr, 'Making shared borders...'
-    shared_borders = populate_shared_segments_by_combination(datasource)
+    if verbose:
+        print >> stderr, 'Making shared borders...'
+
+    shared_borders = populate_shared_segments_by_combination(datasource, verbose)
     
-    print >> stderr, 'Making unshared borders...'
-    populate_unshared_segments(datasource, shared_borders)
+    if verbose:
+        print >> stderr, 'Making unshared borders...'
+
+    populate_unshared_segments(datasource, shared_borders, verbose)
     
     return datasource
 
@@ -261,7 +273,7 @@ def linemerge(shape):
     result = lgeos.GEOSLineMerge(shape._geom)
     return geom_factory(result)
 
-def populate_shared_segments_by_combination(datasource):
+def populate_shared_segments_by_combination(datasource, verbose=False):
     """
     """
     shared = [[] for i in datasource._indexes()]
@@ -273,8 +285,9 @@ def populate_shared_segments_by_combination(datasource):
         shape2 = datasource.shapes[j]
         
         if shape1.intersects(shape2):
-            print >> stderr, '%.2f%% -' % (100. * comparison/comparisons),
-            print >> stderr, 'features %d and %d:' % (i, j),
+            if verbose:
+                print >> stderr, '%.2f%% -' % (100. * comparison/comparisons),
+                print >> stderr, 'features %d and %d:' % (i, j),
             
             border = linemerge(shape1.intersection(shape2))
             
@@ -298,18 +311,20 @@ def populate_shared_segments_by_combination(datasource):
                     bbox = min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
                     datasource.rtree.add(datasource.db.lastrowid, bbox)
 
-                print >> stderr, len(coords), '-',
+                if verbose:
+                    print >> stderr, len(coords), '-',
             
             shared[i].append(border)
             shared[j].append(border)
             
-            print >> stderr, border.type
+            if verbose:
+                print >> stderr, border.type
     
         comparison += 1
 
     return shared
 
-def populate_shared_segments_by_rtree(datasource):
+def populate_shared_segments_by_rtree(datasource, verbose=False):
     """
     """
     rtree = Rtree()
@@ -339,7 +354,8 @@ def populate_shared_segments_by_rtree(datasource):
             if not shape1.intersects(shape2):
                 continue
             
-            print >> stderr, 'Features %d and %d:' % (i, j), 'of', len(indexes),
+            if verbose:
+                print >> stderr, 'Features %d and %d:' % (i, j), 'of', len(indexes),
             
             border = linemerge(shape1.intersection(shape2))
             
@@ -363,16 +379,18 @@ def populate_shared_segments_by_rtree(datasource):
                     bbox = min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
                     datasource.rtree.add(datasource.db.lastrowid, bbox)
 
-                print >> stderr, len(coords), '-',
+                if verbose:
+                    print >> stderr, len(coords), '-',
             
             shared[i].append(border)
             shared[j].append(border)
             
-            print >> stderr, border.type
+            if verbose:
+                print >> stderr, border.type
 
     return shared
 
-def populate_unshared_segments(datasource, shared):
+def populate_unshared_segments(datasource, shared, verbose=False):
     """
     """
     for i in datasource._indexes():
@@ -382,7 +400,8 @@ def populate_unshared_segments(datasource, shared):
         for border in shared[i]:
             boundary = boundary.difference(border)
         
-        print >> stderr, 'Feature %d:' % i,
+        if verbose:
+            print >> stderr, 'Feature %d:' % i,
     
         geoms = hasattr(boundary, 'geoms') and boundary.geoms or [boundary]
         geoms = [geom for geom in geoms if hasattr(geom, 'coords')]
@@ -405,9 +424,11 @@ def populate_unshared_segments(datasource, shared):
                 bbox = min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
                 datasource.rtree.add(datasource.db.lastrowid, bbox)
     
-            print >> stderr, len(coords), '-',
+            if verbose:
+                print >> stderr, len(coords), '-',
     
-        print >> stderr, boundary.type
+        if verbose:
+            print >> stderr, boundary.type
 
 def save(datasource, filename):
     """ Save a Datasource instance to a named OGR datasource.
