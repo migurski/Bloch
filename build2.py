@@ -1,7 +1,7 @@
 from sys import stderr
 from optparse import OptionParser
 
-from Bloch import load, simplify_linework, save
+from Bloch import load, save
 
 parser = OptionParser(usage="""%prog <input file> <tolerance> <output file> [<tolerance> <output file>]+
 
@@ -23,7 +23,7 @@ if __name__ == '__main__':
     for (tolerance, outfile) in sorted(outfiles):
     
         print >> stderr, 'Simplifying linework to %d...' % tolerance
-        simplify_linework(datasource, tolerance)
+        datasource.simplify(tolerance)
         
         print >> stderr, 'Building %s...' % outfile
         save(datasource, outfile)

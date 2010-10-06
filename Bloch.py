@@ -74,6 +74,115 @@ class Datasource:
 
     def _indexes(self):
         return range(len(self.values))
+    
+    def simplify(self, tolerance):
+        """ Simplify the polygonal linework.
+        
+            This method can be called multiple times, but because the process
+            is destructive, it must be called with progressively increasing
+            tolerance values.
+        """
+        if tolerance < self.tolerance:
+            raise Exception('Repeat calls to simplify must have increasing tolerances.')
+        
+        self.tolerance = tolerance
+    
+        q = 'SELECT line_id, COUNT(guid) AS guids FROM segments WHERE removed=0 GROUP BY line_id order by guids DESC'
+        line_ids = [line_id for (line_id, count) in self.db.execute(q)]
+        
+        stable_lines = set()
+        
+        while True:
+        
+            was = self.db.execute('SELECT COUNT(*) FROM segments WHERE removed=0').fetchone()[0]
+            
+            preserved, popped = set(), False
+            
+            for line_id in line_ids:
+            
+                if line_id in stable_lines:
+                    continue
+                
+                # For each coordinate that forms the apex of a two-segment
+                # triangle, find the area of that triangle and put it into a list
+                # along with the segment identifier and the resulting line if the
+                # triangle were flattened, ordered from smallest to largest.
+            
+                rows = self.db.execute("""SELECT guid, x1, y1, x2, y2
+                                          FROM segments
+                                          WHERE line_id = ?
+                                          AND removed = 0
+                                          ORDER BY guid""",
+                                             (line_id, ))
+                
+                segs = [(guid, (x1, y1), (x2, y2)) for (guid, x1, y1, x2, y2) in rows]
+                triples = [(segs[i][0], segs[i+1][0], segs[i][1], segs[i][2], segs[i+1][2]) for i in range(len(segs) - 1)]
+                triangles = [(guid1, guid2, Polygon([c1, c2, c3, c1]), c1, c3) for (guid1, guid2, c1, c2, c3) in triples]
+                areas = sorted( [(triangle.area, guid1, guid2, c1, c3) for (guid1, guid2, triangle, c1, c3) in triangles] )
+                
+                min_area = self.tolerance ** 2
+                
+                if not areas or areas[0][0] > min_area:
+                    # there's nothing to be done
+                    stable_lines.add(line_id)
+                    stderr.write('-')
+                    continue
+                
+                # Reduce any segments that makes a triangle whose area is below
+                # the minimum threshold, starting with the smallest and working up.
+                # Mark segments to be preserved until the next iteration.
+                
+                for (area, guid1, guid2, ca, cb) in areas:
+                    if area > min_area:
+                        # there won't be any more points to remove.
+                        break
+                    
+                    if guid1 in preserved or guid2 in preserved:
+                        # the current segment is too close to a previously-preserved one.
+                        continue
+            
+                    # Check the resulting flattened line against the rest
+                    # any of the original shapefile, to determine if it would
+                    # cross any existing line segment.
+                    
+                    (x1, y1), (x2, y2) = ca, cb
+                    new_line = self.memo_line(x1, y1, x2, y2)
+            
+                    old_guids = self.rtree.intersection(bbox(x1, y1, x2, y2))
+                    old_rows = self.db.execute('SELECT x1, y1, x2, y2 FROM segments WHERE guid IN (%s) AND removed=0' % ','.join(map(str, old_guids)))
+                    old_lines = [self.memo_line(x1, y1, x2, y2) for (x1, y1, x2, y2) in old_rows]
+                    
+                    if True in [new_line.crosses(old_line) for old_line in old_lines]:
+                        stderr.write('x%d' % line_id)
+                        continue
+                    
+                    preserved.add(guid1)
+                    preserved.add(guid2)
+                    
+                    popped = True
+                    
+                    x1, y1, x2, y2 = ca[0], ca[1], cb[0], cb[1]
+            
+                    self.db.execute('UPDATE segments SET removed=1 WHERE guid=%d' % guid2)
+                    self.db.execute('UPDATE segments SET x1=?, y1=?, x2=?, y2=? WHERE guid=?',
+                                          (x1, y1, x2, y2, guid1))
+            
+                    self.rtree.add(guid1, bbox(x1, y1, x2, y2))
+                
+                stderr.write('.')
+            
+            print >> stderr, ' reduced from', was, 'to',
+            print >> stderr, self.db.execute('SELECT COUNT(guid) FROM segments WHERE removed=0').fetchone()[0],
+            
+            self.rtree = Rtree()
+            
+            for (guid, x1, y1, x2, y2) in self.db.execute('SELECT guid, x1, y1, x2, y2 FROM segments WHERE removed=0'):
+                self.rtree.add(guid1, bbox(x1, y1, x2, y2))
+                
+            print >> stderr, '.'
+    
+            if not popped:
+                break
 
 def load(filename):
     """ Load an OGR data source, return a new Datasource instance.
@@ -268,108 +377,6 @@ def populate_unshared_segments(datasource, shared):
             print >> stderr, len(coords), '-',
     
         print >> stderr, boundary.type
-
-def simplify_linework(datasource, tolerance):
-    """ Do the thing.
-    """
-    datasource.tolerance = tolerance
-
-    q = 'SELECT line_id, COUNT(guid) AS guids FROM segments WHERE removed=0 GROUP BY line_id order by guids DESC'
-    line_ids = [line_id for (line_id, count) in datasource.db.execute(q)]
-    
-    stable_lines = set()
-    
-    while True:
-    
-        was = datasource.db.execute('SELECT COUNT(*) FROM segments WHERE removed=0').fetchone()[0]
-        
-        preserved, popped = set(), False
-        
-        for line_id in line_ids:
-        
-            if line_id in stable_lines:
-                continue
-            
-            # For each coordinate that forms the apex of a two-segment
-            # triangle, find the area of that triangle and put it into a list
-            # along with the segment identifier and the resulting line if the
-            # triangle were flattened, ordered from smallest to largest.
-        
-            rows = datasource.db.execute("""SELECT guid, x1, y1, x2, y2
-                                            FROM segments
-                                            WHERE line_id = ?
-                                              AND removed = 0
-                                            ORDER BY guid""",
-                                         (line_id, ))
-            
-            segs = [(guid, (x1, y1), (x2, y2)) for (guid, x1, y1, x2, y2) in rows]
-            triples = [(segs[i][0], segs[i+1][0], segs[i][1], segs[i][2], segs[i+1][2]) for i in range(len(segs) - 1)]
-            triangles = [(guid1, guid2, Polygon([c1, c2, c3, c1]), c1, c3) for (guid1, guid2, c1, c2, c3) in triples]
-            areas = sorted( [(triangle.area, guid1, guid2, c1, c3) for (guid1, guid2, triangle, c1, c3) in triangles] )
-            
-            min_area = datasource.tolerance ** 2
-            
-            if not areas or areas[0][0] > min_area:
-                # there's nothing to be done
-                stable_lines.add(line_id)
-                stderr.write('-')
-                continue
-            
-            # Reduce any segments that makes a triangle whose area is below
-            # the minimum threshold, starting with the smallest and working up.
-            # Mark segments to be preserved until the next iteration.
-            
-            for (area, guid1, guid2, ca, cb) in areas:
-                if area > min_area:
-                    # there won't be any more points to remove.
-                    break
-                
-                if guid1 in preserved or guid2 in preserved:
-                    # the current segment is too close to a previously-preserved one.
-                    continue
-        
-                # Check the resulting flattened line against the rest
-                # any of the original shapefile, to determine if it would
-                # cross any existing line segment.
-                
-                (x1, y1), (x2, y2) = ca, cb
-                new_line = datasource.memo_line(x1, y1, x2, y2)
-        
-                old_guids = datasource.rtree.intersection(bbox(x1, y1, x2, y2))
-                old_rows = datasource.db.execute('SELECT x1, y1, x2, y2 FROM segments WHERE guid IN (%s) AND removed=0' % ','.join(map(str, old_guids)))
-                old_lines = [datasource.memo_line(x1, y1, x2, y2) for (x1, y1, x2, y2) in old_rows]
-                
-                if True in [new_line.crosses(old_line) for old_line in old_lines]:
-                    stderr.write('x%d' % line_id)
-                    continue
-                
-                preserved.add(guid1)
-                preserved.add(guid2)
-                
-                popped = True
-                
-                x1, y1, x2, y2 = ca[0], ca[1], cb[0], cb[1]
-        
-                datasource.db.execute('UPDATE segments SET removed=1 WHERE guid=%d' % guid2)
-                datasource.db.execute('UPDATE segments SET x1=?, y1=?, x2=?, y2=? WHERE guid=?',
-                                      (x1, y1, x2, y2, guid1))
-        
-                datasource.rtree.add(guid1, bbox(x1, y1, x2, y2))
-            
-            stderr.write('.')
-        
-        print >> stderr, ' reduced from', was, 'to',
-        print >> stderr, datasource.db.execute('SELECT COUNT(guid) FROM segments WHERE removed=0').fetchone()[0],
-        
-        datasource.rtree = Rtree()
-        
-        for (guid, x1, y1, x2, y2) in datasource.db.execute('SELECT guid, x1, y1, x2, y2 FROM segments WHERE removed=0'):
-            datasource.rtree.add(guid1, bbox(x1, y1, x2, y2))
-            
-        print >> stderr, '.'
-
-        if not popped:
-            break
 
 def save(datasource, filename):
     """ Save a Datasource instance to a named OGR datasource.
