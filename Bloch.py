@@ -14,6 +14,8 @@ from shapely.ops import polygonize
 
 drivers = {'.shp': 'ESRI Shapefile', '.json': 'GeoJSON'}
 
+__all__ = ['load', 'save', 'Datasource']
+
 class Field:
     """
     """
@@ -67,11 +69,11 @@ class Datasource:
         self.rtree = Rtree()
         self.memo_line = make_memo_line()
 
-    def indexes(self):
+    def _indexes(self):
         return range(len(self.values))
 
 def load(filename):
-    """
+    """ Load an OGR data source, return a new Datasource instance.
     """
     print >> stderr, 'Making data source...'
     datasource = make_datasource(filename)
@@ -119,10 +121,10 @@ def linemerge(shape):
 def populate_shared_segments_by_combination(datasource):
     """
     """
-    shared = [[] for i in datasource.indexes()]
-    comparison, comparisons = 0, len(datasource.indexes())**2 / 2
+    shared = [[] for i in datasource._indexes()]
+    comparison, comparisons = 0, len(datasource._indexes())**2 / 2
     
-    for (i, j) in combinations(datasource.indexes(), 2):
+    for (i, j) in combinations(datasource._indexes(), 2):
     
         shape1 = datasource.shapes[i]
         shape2 = datasource.shapes[j]
@@ -168,7 +170,7 @@ def populate_shared_segments_by_rtree(datasource):
     """
     """
     rtree = Rtree()
-    indexes = datasource.indexes()
+    indexes = datasource._indexes()
     
     for i in indexes:
         xmin, ymin, xmax, ymax = datasource.shapes[i].bounds
@@ -230,7 +232,7 @@ def populate_shared_segments_by_rtree(datasource):
 def populate_unshared_segments(datasource, shared):
     """
     """
-    for i in datasource.indexes():
+    for i in datasource._indexes():
     
         boundary = datasource.shapes[i].boundary
         
@@ -364,8 +366,8 @@ def simplify_linework(datasource, tolerance):
         if not popped:
             break
 
-def save_datasource(datasource, filename):
-    """
+def save(datasource, filename):
+    """ Save a Datasource instance to a named OGR datasource.
     """
     ext = splitext(filename)[1]
     
@@ -379,7 +381,7 @@ def save_datasource(datasource, filename):
         field_defn.SetWidth(field.width)
         out_layer.CreateField(field_defn)
     
-    for i in datasource.indexes():
+    for i in datasource._indexes():
     
         segments = datasource.db.execute("""SELECT x1, y1, x2, y2
                                             FROM segments

@@ -1,7 +1,7 @@
 from sys import stderr
 from optparse import OptionParser
 
-from Bloch import load, simplify_linework, save_datasource
+from Bloch import load, simplify_linework, save
 
 parser = OptionParser(usage="""%prog <input file> <tolerance> <output file> [<tolerance> <output file>]+
 
@@ -16,7 +16,7 @@ if __name__ == '__main__':
     print >> stderr, 'Loading data...'
     datasource = load(infile)
     
-    print >> stderr, len(datasource.indexes()), 'shapes,',
+    print >> stderr, len(datasource._indexes()), 'shapes,',
     print >> stderr, datasource.db.execute('SELECT COUNT(DISTINCT line_id) FROM segments').fetchone()[0], 'lines,',
     print >> stderr, datasource.db.execute('SELECT COUNT(DISTINCT guid) FROM segments').fetchone()[0], 'segments.'
     
@@ -26,4 +26,4 @@ if __name__ == '__main__':
         simplify_linework(datasource, tolerance)
         
         print >> stderr, 'Building %s...' % outfile
-        save_datasource(datasource, outfile)
+        save(datasource, outfile)
