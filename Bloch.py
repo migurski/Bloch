@@ -1,3 +1,32 @@
+""" Simplify linework in polygonal geographic datasources.
+
+Inspired by Matthew Bloch's MapShaper.org thesis, Bloch can load OGR-compatible
+data sources and simplify the linework while preserving topology. The simplify()
+method accepts tolerances in map units, so simplification can be performed by
+known amounts with predictable outcomes.
+
+Example usage:
+
+  # Load a data file into a Datasource instance.
+  datasrc = load('input.json')
+  
+  # Simplify the geometry.
+  datasrc.simplify(500)
+  
+  # Save it out to a new shapefile.
+  save(datasrc, 'output1.shp')
+  
+  # This will throw an error, because 250 < 500.
+  datasrc.simplify(250)
+  
+  # Simplify the geometry more.
+  datasrc.simplify(1000)
+  
+  # Save it out to a new GeoJSON file.
+  save(datasrc, 'output2.json')
+
+"""
+
 from sys import stderr
 from os.path import splitext
 from itertools import combinations, permutations
@@ -25,9 +54,11 @@ class Field:
         self.width = width
 
 class Datasource:
-    """
+    """ Store an exploded representation of a data source, so it can be simplified.
     """
     def __init__(self, srs, geom_type, fields, values, shapes):
+        """ Use load() to call this constructor.
+        """
         self.srs = srs
         self.fields = fields
         self.geom_type = geom_type
@@ -78,8 +109,8 @@ class Datasource:
     def simplify(self, tolerance):
         """ Simplify the polygonal linework.
         
-            This method can be called multiple times, but because the process
-            is destructive, it must be called with progressively increasing
+            This method can be called multiple times, but the process is
+            destructive so it must be called with progressively increasing
             tolerance values.
         """
         if tolerance < self.tolerance:
