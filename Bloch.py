@@ -33,6 +33,9 @@ class Datasource:
         self.geom_type = geom_type
         self.values = values
         self.shapes = shapes
+
+        # this will be changed later
+        self.tolerance = 0
         
         # guid, src1_id, src2_id, line_id, x1, y1, x2, y2
         
@@ -269,6 +272,8 @@ def populate_unshared_segments(datasource, shared):
 def simplify_linework(datasource, tolerance):
     """ Do the thing.
     """
+    datasource.tolerance = tolerance
+
     q = 'SELECT line_id, COUNT(guid) AS guids FROM segments WHERE removed=0 GROUP BY line_id order by guids DESC'
     line_ids = [line_id for (line_id, count) in datasource.db.execute(q)]
     
@@ -302,7 +307,7 @@ def simplify_linework(datasource, tolerance):
             triangles = [(guid1, guid2, Polygon([c1, c2, c3, c1]), c1, c3) for (guid1, guid2, c1, c2, c3) in triples]
             areas = sorted( [(triangle.area, guid1, guid2, c1, c3) for (guid1, guid2, triangle, c1, c3) in triangles] )
             
-            min_area = tolerance ** 2
+            min_area = datasource.tolerance ** 2
             
             if not areas or areas[0][0] > min_area:
                 # there's nothing to be done
@@ -395,7 +400,7 @@ def save(datasource, filename):
     
         except StopIteration:
             lost_area = datasource.shapes[i].area
-            lost_portion = lost_area / (tolerance ** 2)
+            lost_portion = lost_area / (datasource.tolerance ** 2)
             
             if lost_portion < 4:
                 # It's just small.
