@@ -1,9 +1,9 @@
 """ Simplify linework in polygonal geographic datasources.
 
-Inspired by Matthew Bloch's MapShaper.org thesis, Bloch can load OGR-compatible
-data sources and simplify the linework while preserving topology. The simplify()
-method accepts tolerances in map units, so simplification can be performed by
-known amounts with predictable outcomes.
+Inspired by Matthew Bloch's MapShaper thesis (http://mapshaper.org), Bloch can
+load OGR-compatible data sources and simplify the linework while preserving
+topology. The simplify() method accepts tolerances in map units, so
+simplification can be performed by known amounts with predictable outcomes.
 
 Dependencies include Warmerdam (http://trac.osgeo.org/gdal/wiki/GdalOgrInPython)
 and Gillies (http://trac.gispython.org/lab/wiki/Rtree, http://trac.gispython.org/lab/wiki/Shapely).
