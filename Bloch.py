@@ -416,7 +416,10 @@ def save(datasource, filename):
     
     out_driver = ogr.GetDriverByName(drivers.get(ext))
     out_source = out_driver.CreateDataSource(filename)
-    assert out_source is not None, 'Failed creation of %s' % filename
+    
+    if out_source is None:
+        raise Exception('Failed creation of %s - is there one already?' % filename)
+    
     out_layer = out_source.CreateLayer('default', datasource.srs, ogr.wkbMultiPolygon)
     
     for field in datasource.fields:

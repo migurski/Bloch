@@ -5,7 +5,11 @@ from Bloch import load, save
 
 parser = OptionParser(usage="""%prog <input file> <tolerance> <output file> [<tolerance> <output file>]+
 
-..""")
+Example:
+
+  %prog counties.shp 500 counties-simple.shp 5000 counties-simpler.shp
+
+That is all.""")
 
 if __name__ == '__main__':
     opts, args = parser.parse_args()
